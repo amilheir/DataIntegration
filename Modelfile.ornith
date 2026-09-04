@@ -1,0 +1,14 @@
+# 8192-context build of ornith-1.5:9b for the frontend model picker.
+#
+# Build with: ollama create etlwizard-ornith -f Modelfile.ornith
+#   docker exec irisetlwizard-ollama-1 ollama create etlwizard-ornith -f /Modelfile.ornith
+#
+# Requires Ollama >= 0.31 to pull the base model; 0.30.10 returns
+# "412: requires a newer version of Ollama" on `ollama pull ornith-1.5:9b`.
+#
+# 4096 (the stock default) is NOT enough: the architect prompt is ~4100 tokens
+# and Ollama truncates silently rather than erroring - the symptom is an empty
+# response, not a failure. See Modelfile.coder for the VRAM sizing rule.
+
+FROM ornith-1.5:9b
+PARAMETER num_ctx 8192

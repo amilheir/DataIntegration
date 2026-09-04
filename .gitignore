@@ -1,0 +1,14 @@
+src-iris/data/
+src-iris/iris-main.log
+src-iris/.venv/
+src-iris/jdbc/
+__pycache__/
+node_modules/
+*.log
+.claude
+.devcontainer
+# Credential material. These now live outside the project tree (see .env,
+# IRIS_KEY_PATH / IRIS_PW_FILE) — this is belt and braces in case a copy is
+# ever dropped back in (IMPROVEMENTS_SPEC SG-2).
+*.key
+mds/

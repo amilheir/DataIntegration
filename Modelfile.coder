@@ -1,0 +1,28 @@
+# Model for the SQL agent and index advisor (AI.LLM.ETLWizardSqlGen), and a
+# candidate for the architect (AI.LLM.ETLWizard) as well.
+#
+# Build with: ollama create etlwizard-coder -f Modelfile.coder
+#   docker exec irisetlwizard-ollama-1 ollama create etlwizard-coder -f /Modelfile.coder
+#
+# Why this exists alongside Modelfile (qwen3.5:9b @ 8192):
+#
+# num_ctx must FIT IN VRAM together with the weights. On the 8 GB RTX 2000 Ada
+# this project was benchmarked on, the 9B build lands at 6.4 GB and spills
+# 23% of its layers to CPU; it also evicts whatever else is resident, so every
+# architect <-> SqlGen alternation pays a 5-18s reload. This 7B build lands at
+# 5.0 GB fully on GPU at the same 8192 context, leaving ~3 GB of headroom.
+#
+# 4096 (the stock qwen2.5-coder default) is NOT enough: the architect prompt is
+# ~4100 tokens, and Ollama truncates silently rather than erroring - the symptom
+# is an empty response, not a failure. 8192 covers it with room for the repair
+# turns SqlGen appends.
+#
+# Measured on the index-advisor prompt (431 in, ~150 tokens is the whole answer):
+#   qwen2.5-coder:7b       148 out    12.7s   valid JSON
+#   gemma4:e4b-it-q4_K_M  1503 out    56.3s   JSON buried in markdown prose
+#   etlwizard-qwen        3072 out   3m35s    ran to the cap, never emitted JSON
+# Wall-clock here is driven by how much the model writes, not tokens/sec -
+# gemma4 is the fastest per token of the three and still the slowest overall.
+
+FROM qwen2.5-coder:7b
+PARAMETER num_ctx 8192

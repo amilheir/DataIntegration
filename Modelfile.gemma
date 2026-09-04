@@ -1,0 +1,18 @@
+# 8192-context build of gemma4:e4b for the frontend model picker.
+#
+# Build with: ollama create etlwizard-gemma -f Modelfile.gemma
+#   docker exec irisetlwizard-ollama-1 ollama create etlwizard-gemma -f /Modelfile.gemma
+#
+# 4096 (the stock default) is NOT enough: the architect prompt is ~4100 tokens
+# and Ollama truncates silently rather than erroring - the symptom is an empty
+# response, not a failure. This is the exact bug that made gemma4 look broken
+# before the context was raised.
+#
+# Note on speed: gemma4:e4b is the FASTEST of the picker options per token
+# (~32 tok/s, fully on GPU) and still the slowest wall-clock on short
+# structured tasks, because it writes far more than asked - measured 1503
+# output tokens on an index-advisor prompt whose full answer is ~150. If it
+# feels slow, that is verbosity, not hardware. See Modelfile.coder.
+
+FROM gemma4:e4b-it-q4_K_M
+PARAMETER num_ctx 8192

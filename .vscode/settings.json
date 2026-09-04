@@ -1,0 +1,7 @@
+{
+    "objectscript.conn": {
+        "server": "aihub",
+        "ns": "ETLWIZARD",
+        "active": false
+    }
+}

@@ -1,0 +1,13 @@
+[mcp]
+transport = "stdio"
+
+[[iris]]
+name   = "local"
+server = { host = "localhost", port = 1972, username = "_SYSTEM", password = "SYS" }
+pool   = { min = 2, max = 10 }
+endpoints = [{ path = "/mcp/teste1" }]
+
+[logging]
+level  = "debug"
+output = "file"
+file   = "iris-mcp.log"

@@ -1,0 +1,8 @@
+# Runtime data written by the running container (ISC_DATA_DIRECTORY) — never
+# part of the build context
+src-iris/data/
+src-iris/iris-main.log
+.git/
+postgres-init/
+webgateway/
+*.md

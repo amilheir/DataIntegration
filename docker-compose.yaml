@@ -1,0 +1,102 @@
+services:
+  iris:
+    hostname: iris-etlwizard
+    # Room for the WIJ flush when something does stop this gracefully. This is
+    # NOT sufficient on its own — IRIS does not trap SIGTERM, so a plain
+    # `docker compose down` still ends in SIGKILL and can roll back recent
+    # writes. Use scripts/stop.sh, which runs `iris stop IRIS quietly` first.
+    stop_grace_period: 60s
+    build:
+      args:
+        IRIS_IMAGE: ${IRIS_IMAGE}
+      context: .
+      dockerfile: ./src-iris/Dockerfile
+      # Credential material reaches the build as secrets, never as files in the
+      # build context (IMPROVEMENTS_SPEC SG-2) — both live outside the project
+      # tree, at the paths named in .env.
+      secrets:
+        - iris_pw
+        - iris_key
+    environment:
+      - ISC_DATA_DIRECTORY=/opt/irisbuild/data
+      - ISC_CPF_MERGE_FILE=/opt/irisbuild/cpf/cpfmerge.cpf
+      # so IRIS's iODBC (SQL Gateway ODBC) always finds the pre-wired DSNs
+      - ODBCINI=/usr/irissys/mgr/irisodbc.ini
+      - ODBCINSTINI=/etc/odbcinst.ini
+    volumes:
+      - ./src-iris:/opt/irisbuild
+      # Durable %SYS lives in a named volume: a Windows bind mount can't be
+      # chown'd to irisowner, which makes the durable-data init abort.
+      - iris-data:/opt/irisbuild/data
+    env_file: .env
+    ports:
+      - "${IRIS_SPORT}:1972"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # HTTP front end: the AI Hub EAP iris-community image has no private web
+  # server (WebServer=0, no CSP binaries), so REST/WS are served through the
+  # official Web Gateway.
+  webgateway:
+    image: "${WEBGATEWAY_IMAGE}"
+    depends_on:
+      - iris
+    ports:
+      - "${IRIS_PORT}:80"
+    volumes:
+      - ./webgateway/webgateway-init.sh:/webgateway-init.sh:ro
+    # The script is bind-mounted from a Windows host, where an editor can save
+    # it with CRLF endings. Inside this container /bin/sh is dash: every line
+    # then ends in \r, so commands become ": not found" and the `for` loop dies
+    # with "Syntax error: word unexpected (expecting \"do\")" — the container
+    # exits 2 and the whole UI goes down. The mount is :ro so it can't be fixed
+    # in place; strip CR on the way into the shell instead. Harmless on LF.
+    entrypoint: ["/bin/sh", "-c", "sed 's/\\r$//' /webgateway-init.sh | /bin/sh"]
+
+  # Demo CRM source database (spec §22 example scenario)
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=crm
+      - POSTGRES_PASSWORD=crm
+      - POSTGRES_DB=crm
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+
+  # Local LLM (spec §27): starts by default alongside iris/webgateway/postgres.
+  # Models are provisioned manually (e.g. `ollama pull gemma4:e4b-it-q4_K_M`) and
+  # the profile is pointed at them via ETLWizard.Setup. Note: a raw model keeps
+  # Ollama's default num_ctx 4096, which can truncate the large architect prompt
+  # and return an empty reply — build a num_ctx-8192 Modelfile variant if you hit
+  # that on the architect (the SqlGen prompt is small and unaffected).
+  ollama:
+    image: "${OLLAMA_IMAGE:-ollama/ollama:0.32.14}"
+    environment:
+      # Models unload after 5m by default, so the first wizard call of a session
+      # pays a 5-18s cold load on top of generation. Keep them resident.
+      OLLAMA_KEEP_ALIVE: "-1"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ollama-models:
+  pg-data:
+  iris-data:
+
+secrets:
+  iris_pw:
+    file: "${IRIS_PW_FILE}"
+  iris_key:
+    file: "${IRIS_KEY_PATH}"
