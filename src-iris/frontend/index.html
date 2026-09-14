@@ -202,6 +202,7 @@ input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow
 #pipelist { min-width: 7.5rem; max-width: 10rem; }
 #tablelist { min-width: 7.5rem; max-width: 10rem; }
 #mlmodellist { min-width: 7.5rem; max-width: 10rem; }
+#mcptoollist { min-width: 7.5rem; max-width: 10rem; }
 .toolbar { gap: .35rem; }
 .toolbar .btn { padding: .36rem .6rem; }
 .toolbar select { padding: .32rem .45rem; font-size: .82rem; }
@@ -701,7 +702,7 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
          to choose what gets deleted - leaving them outside put a destructive
          control's argument in the main toolbar while hiding the verb. -->
     <details id="presenterTools" class="presenterTools">
-      <summary title="Destructive actions - deleting a pipeline, dropping a table or an ML model, clearing everything">Presenter tools</summary>
+      <summary title="Destructive actions - deleting a pipeline, dropping a table, an ML model or an MCP tool, clearing everything">Presenter tools</summary>
       <div class="ptbody">
         <button id="delpipe" class="btn danger" title="Delete the selected pipeline (its tables are kept)">Delete Pipeline</button>
         <span class="tsep"></span>
@@ -710,6 +711,9 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
         <span class="tsep"></span>
         <select id="mlmodellist" title="IntegratedML models on this instance"></select>
         <button id="delmodel" class="btn danger" title="Drop the selected ML model and everything trained from it">Delete Model</button>
+        <span class="tsep"></span>
+        <select id="mcptoollist" title="Tools published to the MCP endpoint"></select>
+        <button id="delmcptool" class="btn danger" title="Unpublish the selected MCP tool - the table it reads is untouched">Delete MCP Tool</button>
         <span class="tsep"></span>
         <button id="clearall" class="btn danger" title="Delete every pipeline and every table the wizard built">Clear all</button>
       </div>
@@ -725,6 +729,7 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
     <button class="tab" id="tab_sources" data-tab="sources" role="tab">Data Sources</button>
     <button class="tab" id="tab_etl" data-tab="etl" role="tab">ETL Interop</button>
     <button class="tab" id="tab_ml" data-tab="ml" role="tab">ML Models</button>
+    <button class="tab" id="tab_mcp" data-tab="mcp" role="tab">MCP Tools</button>
   </div>
 </header>
 <main>
@@ -795,7 +800,7 @@ const EXEC = () => VIEW === "executive";
 function sessGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
 function sessSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } }
 
-const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models" };
+const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models", mcp: "MCP Tools" };
 
 function applyView() {
   document.body.setAttribute("data-view", VIEW);
@@ -1124,14 +1129,19 @@ function chatBubble(role, text) {
 /* ---------- Flowchart ---------- */
 const KIND_RANK = { source: 1, foreign_server: 2, foreign_table: 3, rest_client: 3,
   landing: 4, staging: 5, transform_view: 6, target: 7, check: 8, quarantine: 8,
-  host: 9, production: 9 };
+  host: 9, production: 9,
+  // MCP Tools tab - a target table fans out into its published tools, which
+  // all feed the single endpoint
+  mcp_tool: 10, mcp_endpoint: 11 };
 const KIND_LABEL = { source: "Source", foreign_server: "Foreign Server",
   foreign_table: "Foreign Table", rest_client: "REST Client", landing: "Landing",
   staging: "Staging", transform_view: "Transform", target: "Target", check: "Check", load_config: "Load Config", bulk_load: "Bulk Load",
   quarantine: "Quarantine", host: "Production Host", production: "Production",
   // ML Models tab - the chart is derived live from INFORMATION_SCHEMA.ML_*
   ml_source: "Training Data", ml_model: "Model", ml_trained: "Trained Model",
-  ml_validation: "Validation", ml_metrics: "Metrics" };
+  ml_validation: "Validation", ml_metrics: "Metrics",
+  // MCP Tools tab
+  mcp_tool: "MCP Tool", mcp_endpoint: "MCP Endpoint" };
 
 function subRank(n) {
   if (n.kind === "host") {
@@ -1692,6 +1702,8 @@ const EXECGUIDE = {
   mlmodel:    "Name the model, pick the table it learns from, and choose what you want it to predict.",
   mltrain:    "Training runs in the background, so this stays responsive while it works.",
   mlvalidate: "Score the model against real data and read the result.",
+  mcp:        "Open the curated data to an AI assistant &mdash; it can ask questions of these tables and chart the answers, without a copy of the data leaving the database.",
+  mcptools:   "Each tool is one question this data can answer. Read them, change them, try them &mdash; nothing is exposed until you publish.",
   mlpredict:  "Predictions are worked out as you look at them &mdash; each sits beside the real row it came from, so you can compare."
 };
 
@@ -3177,6 +3189,78 @@ $("delmodel").onclick = async () => {
   }
 };
 
+/* ---- MCP tool picker (Presenter tools) ---------------------------------
+   The MCP tab publishes tools; this is the only place ONE can be withdrawn
+   without republishing the rest by hand, which is why it sits with the other
+   destructive controls. Reads /mcp/published, so what is listed here is what
+   the endpoint actually serves - not what the tab last proposed. */
+async function refreshMcpTools(keepValue) {
+  const sel = $("mcptoollist");
+  if (!sel) return;
+  const keep = keepValue !== undefined ? keepValue : sel.value;
+  try {
+    const j = await (await fetch(api("/mcp/published"))).json();
+    const list = j.tools || [];
+    // the spec carries the table each tool reads; discovery does not, so the
+    // label is joined from both rather than parsed out of the tool name
+    const byName = {};
+    (j.spec || []).forEach(sp => { byName[sp.name] = sp; });
+    sel.innerHTML = `<option value="">${list.length ? "&mdash; select an MCP tool &mdash;" : "no MCP tools published"}</option>` +
+      list.map(t => {
+        const sp = byName[t.name] || {};
+        const tbl = sp.table ? ` &middot; ${esc(sp.table)}` : "";
+        const args = (t.parameters && t.parameters.properties &&
+                      Object.keys(t.parameters.properties).length)
+          ? ` &middot; ${Object.keys(t.parameters.properties).join(", ")}` : "";
+        return `<option value="${esc(t.name)}">${esc(t.name)}${tbl}${args}</option>`;
+      }).join("");
+    sel.value = (keep && [...sel.options].some(o => o.value === keep)) ? keep : "";
+  } catch (e) {
+    sel.innerHTML = `<option value="">could not load MCP tools</option>`;
+  }
+  $("delmcptool").disabled = !sel.value;
+}
+$("mcptoollist").onchange = () => { $("delmcptool").disabled = !$("mcptoollist").value; };
+
+$("delmcptool").onclick = async () => {
+  const name = $("mcptoollist").value;
+  if (!name) return;
+  const label = $("mcptoollist").selectedOptions[0].textContent;
+  // Says what actually happens: publishing is all-or-nothing, so withdrawing
+  // one tool republishes the others. Nothing in the database is touched.
+  if (!confirm(`Unpublish the MCP tool "${name}"?
+
+${label}
+
+` +
+               `The remaining tools are republished without it. No data is deleted - ` +
+               `the table this tool reads is untouched. Connected assistants keep the ` +
+               `old list until they reconnect.`)) return;
+  const btn = $("delmcptool");
+  btn.disabled = true; setStatus("unpublishing&hellip;");
+  try {
+    const j = await (await fetch(api("/mcp/unpublish"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    })).json();
+    if (j.error) throw new Error(j.error);
+    const left = j.count === undefined ? 0 : j.count;
+    $("runbanner").innerHTML = `Unpublished <b>${esc(name)}</b> &middot; ` +
+      (left ? `<b>${left}</b> tool(s) still published` : "nothing published now");
+    setStatus("tool unpublished");
+    await refreshMcpTools("");
+    // the MCP tab caches its own DOM and its own chart; rebuild both so the
+    // inventory on the right cannot outlive the tool it is drawing
+    resetTab("mcp");
+    if (activeTab === "mcp") { activeTab = null; showTab("mcp"); }
+  } catch (e) {
+    wfail("The MCP tool could not be unpublished.", String(e && e.message || e));
+    setStatus("unpublish failed");
+  } finally {
+    btn.disabled = !$("mcptoollist").value;
+  }
+};
+
 // Wipe everything. Two confirms on purpose: the first says what will go, the
 // second is the "yes, really" — this drops tables, not just definitions.
 $("clearall").onclick = async () => {
@@ -3199,12 +3283,14 @@ $("clearall").onclick = async () => {
     $("runid").value = ""; $("pipeid").value = "";
     $("runbanner").innerHTML = `Cleared <b>${j.pipelines}</b> pipeline(s), <b>${j.runs}</b> run(s) ` +
       `and <b>${j.tablesDropped}</b> table(s)` +
-      ((j.failed || []).length ? ` &middot; ${j.failed.length} could not be dropped` : "");
+      ((j.failed || []).length ? ` &middot; ${j.failed.length} could not be dropped` : "") +
+      (j.mcpCleared ? " &middot; MCP tools unpublished" : "");
     await refreshPipelines("");
     await refreshTables("");
+    await refreshMcpTools("");
     // both tabs' sessions referred to pipelines that no longer exist
     wiz.sourcesRunId = null; wiz.etlRunId = null;
-    resetTab("sources"); resetTab("etl");
+    resetTab("sources"); resetTab("etl"); resetTab("mcp");
     activeTab = null; showTab("sources");
   } finally {
     btn.disabled = false; setStatus("disconnected");
@@ -3257,6 +3343,17 @@ function relPhrase(s) {
             Math.round(d / 86400) + " day" + (Math.round(d / 86400) === 1 ? "" : "s");
   return n === "moments" ? "moments ago" : (ago ? n + " ago" : "in " + n);
 }
+/* An elapsed number of seconds, said the way a person reads it. Sub-second
+   matters here: a small pipeline finishes in tens of milliseconds, and "0.0s"
+   would read as "did not run". */
+function secsPhrase(secs) {
+  const n = Number(secs);
+  if (!isFinite(n) || n < 0) return "";
+  if (n < 1) return `${Math.round(n * 1000)} ms`;
+  if (n < 90) return `${n.toFixed(n < 10 ? 2 : 1)} s`;
+  return `${Math.floor(n / 60)}m ${Math.round(n % 60)}s`;
+}
+
 function durPhrase(a, b) {
   const s = tsMs(a), e = tsMs(b);
   if (isNaN(s) || isNaN(e) || e < s) return "";
@@ -3289,13 +3386,33 @@ async function renderResultsPanel(pid) {
     figs.push(`<div class="rpfig"><div class="k">Rows in target</div><div class="v">${num(t.rowCount)}</div>` +
       `<div class="s">${esc(t.table || "")}</div></div>`);
   }
-  // Freshness as an absolute timestamp AND a relative phrase
+  /* How long one pass through the production takes, end to end: the Extract
+     service creating the session's first message to the Load operation
+     finishing. This is the figure a presenter is asked about ("and how long
+     does that take?"), which is why it takes the prominent slot; the watermark
+     freshness it replaced is kept as the caption rather than dropped.
+
+     Falls back to the old freshness figure when the pipeline has never run
+     through a production - there is no measured duration to show, and an
+     empty tile in its place would read as a failure. */
   const fresh = wm && (wm.lastValue || wm.updatedAt);
-  if (fresh) {
-    const shown = wm.type === "timestamp" && wm.lastValue ? wm.lastValue : (wm.updatedAt || wm.lastValue);
-    const rel = relPhrase(shown);
+  const freshShown = fresh
+    ? (wm.type === "timestamp" && wm.lastValue ? wm.lastValue : (wm.updatedAt || wm.lastValue))
+    : null;
+  const ig = p.integration || null;
+  if (ig) {
+    const avg = ig.sampled > 1
+      ? ` &middot; ${esc(secsPhrase(ig.averageSeconds))} average of ${ig.sampled}` : "";
+    const asOf = freshShown ? ` &middot; data as of ${esc(fmtTs(String(freshShown)))}` : "";
+    figs.push(`<div class="rpfig" title="Measured from the Extract service creating the first message ` +
+      `of session ${esc(String(ig.sessionId))} to the Load operation finishing the last one">` +
+      `<div class="k">Integration time</div>` +
+      `<div class="v" style="font-size:1.05rem">${esc(secsPhrase(ig.seconds))}</div>` +
+      `<div class="s">extract &rarr; load${avg}${asOf}</div></div>`);
+  } else if (fresh) {
+    const rel = relPhrase(freshShown);
     figs.push(`<div class="rpfig"><div class="k">Data current as of</div>` +
-      `<div class="v" style="font-size:1.05rem">${esc(fmtTs(String(shown)))}</div>` +
+      `<div class="v" style="font-size:1.05rem">${esc(fmtTs(String(freshShown)))}</div>` +
       `<div class="s">${rel ? esc(rel) + " &middot; " : ""}watermark on ${esc(wm.column || "")} (UTC)</div></div>`);
   }
   if (last) {
@@ -3469,7 +3586,7 @@ let activeTab = null;
    left — switching tabs to check something must never discard work in
    progress. paneCache[tab] holds the detached nodes; empty means "never
    rendered", which is the only time a tab builds itself from scratch. */
-const paneCache = { sources: null, etl: null, ml: null };
+const paneCache = { sources: null, etl: null, ml: null, mcp: null };
 
 /* The right-hand chart is per-tab too, and the two show different things:
      ETL Interop  - the LIVE graph of the ETL being built, driven by the
@@ -3479,7 +3596,7 @@ const paneCache = { sources: null, etl: null, ml: null };
    loadPipelineChart() clears nodes/edges and freezes the graph, so without
    snapshotting the authoring state, viewing a saved pipeline would wipe the
    ETL you are in the middle of building. */
-const chartCache = { sources: null, etl: null, ml: null };
+const chartCache = { sources: null, etl: null, ml: null, mcp: null };
 
 function saveChart(tab) {
   const snap = {
@@ -3503,6 +3620,7 @@ function restoreChart(tab) {
   $("charttitle").innerHTML =
     tab === "etl" ? "Pipeline flowchart <small>&middot; the logic you are building</small>"
     : tab === "ml" ? "Model flowchart <small>&middot; derived from INFORMATION_SCHEMA</small>"
+    : tab === "mcp" ? "Published tools <small>&middot; what an MCP client can call</small>"
     : "Pipeline flowchart <small>&middot; a saved pipeline</small>";
   if (!snap) {
     $("flow").innerHTML = ""; $("runbanner").innerHTML = ""; $("runhistory").innerHTML = "";
@@ -3513,6 +3631,9 @@ function restoreChart(tab) {
     } else if (tab === "ml") {
       $("runbanner").innerHTML =
         "Create or pick a model to see its flowchart here.";
+    } else if (tab === "mcp") {
+      $("runbanner").innerHTML =
+        "Publish a table to see the tools it exposes here.";
     } else {
       renderGraph();
     }
@@ -3553,6 +3674,8 @@ function showTab(name) {
     renderSourcesTab();
   } else if (name === "ml") {
     renderMlTab();
+  } else if (name === "mcp") {
+    renderMcpTab();
   } else {
     renderEtlTab();
   }
@@ -4358,6 +4481,321 @@ async function ensureEtlSession() {
   await refreshPipelines(j.pipelineId);
 }
 
+/* ---- MCP Tools ---------------------------------------------------------
+   Publishes the target tables this wizard built as MCP tools, so an external
+   assistant can query them and chart the answers (mds/mcp-tab-plan.md).
+
+   One fixed endpoint, one regenerated ToolSet: publishing rewrites the whole
+   tool list rather than appending to it, so what the tab shows is always what
+   the endpoint serves. The server owns validation - a published tool is
+   reachable with no approval step in between, so the guard cannot live in a
+   textarea. */
+const MCP = { endpoint: "/mcp/irisaihub", specs: [], tables: [] };
+
+async function mcpCall(path, payload) {
+  const url = api("/mcp/" + path);
+  const r = await fetch(url, payload === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const text = await r.text();
+  if (!text.trim()) {
+    const why = `The server returned an empty response (HTTP ${r.status}).`;
+    wfail(why, `/mcp/${path} -> HTTP ${r.status}, empty body`); throw new Error(why);
+  }
+  let j;
+  try { j = JSON.parse(text); }
+  catch (e) {
+    const why = `The server answered with something that is not JSON (HTTP ${r.status}).`;
+    wfail(why, text.slice(0, 600)); throw new Error(why);
+  }
+  if (j.error) {
+    wfail(j.error, j.detail ? `${j.detail}\n\n/mcp/${path} -> HTTP ${r.status}` : `/mcp/${path} -> HTTP ${r.status}`);
+    throw new Error(j.error);
+  }
+  return j;
+}
+
+// esc() covers & < > - correct for text and textarea bodies. Attribute values
+// need the quote escaped too, and every field in the tool editor is one the
+// user can type into.
+const escA = s => esc(s).replace(/"/g, "&quot;");
+
+const MCPBTN = "font-family:Newsreader,serif;font-weight:700;font-size:.74rem;" +
+  "background:var(--card);color:var(--ink);border:1.5px solid var(--rule);" +
+  "border-radius:10px;padding:.32rem .7rem;cursor:pointer";
+
+async function renderMcpTab() {
+  await ensureOpt();
+  wguide("<b>MCP Tools.</b> Publish the tables you have built as tools an AI " +
+    "assistant can call over MCP. Each tool is one SQL query with a description; " +
+    "the assistant reads the descriptions, picks a tool, and charts what comes " +
+    "back. Nothing is copied &mdash; every call runs against this database, and " +
+    "only SELECTs can be published.", "", "mcp");
+
+  let pub = { tools: [], spec: [], endpoint: MCP.endpoint };
+  try { pub = await mcpCall("published"); } catch (e) { /* wfail already drew */ }
+  MCP.endpoint = pub.endpoint || MCP.endpoint;
+  MCP.specs = Array.isArray(pub.spec) ? pub.spec : [];
+  if (pub.tools && pub.tools.length) {
+    mcpDrawGraph(MCP.specs, pub.tools);
+    wrecap(`<b>${pub.tools.length}</b> tool${pub.tools.length === 1 ? " is" : "s are"} published at ` +
+      `<code>${esc(MCP.endpoint)}</code>${pub.publishedAt ? " &middot; " + esc(pub.publishedAt) : ""}. ` +
+      `Publishing again replaces the whole list.`);
+  }
+
+  let tables = [];
+  try { tables = (await mcpCall("publishable")).tables || []; } catch (e) { return; }
+  MCP.tables = tables;
+  if (!tables.length) {
+    wmsg("formcard", `<span class="w_details">No target tables yet. Build an ETL on the ` +
+      `<b>ETL Interop</b> tab first &mdash; this tab publishes what that produces.</span>`);
+    return;
+  }
+
+  const rows = tables.map((t, i) =>
+    `<label style="display:flex;gap:.45rem;align-items:baseline">
+       <input type="checkbox" class="mcp_t" value="${escA(t.full)}" ${i === 0 ? "checked" : ""}>
+       <span><b>${esc(t.name)}</b>
+         <span class="w_details">${t.rows === "" ? "" : esc(t.rows) + " rows &middot; "}${(t.columns || []).length} columns</span></span>
+     </label>`).join("");
+
+  stepCard(
+    `<div style="width:100%"><b>Tables to expose</b>
+       <div class="w_details">Each one gets a sample-rows tool, a schema tool, and a
+       grouped-totals tool for every column worth grouping by.</div>
+       <div style="display:flex;flex-direction:column;gap:.3rem;margin-top:.5rem">${rows}</div>
+     </div>`,
+    "Propose tools", async c => {
+      const picked = Array.from(c.querySelectorAll(".mcp_t:checked")).map(x => x.value);
+      if (!picked.length) { wfail("Pick at least one table to publish."); throw new Error("none picked"); }
+      const specs = [];
+      for (const full of picked) {
+        const j = await mcpCall("propose", { table: full });
+        (j.tools || []).forEach(t => specs.push(t));
+      }
+      // Re-proposing a table replaces its previous specs; anything published
+      // for a table NOT picked this time is kept, so one table can be revised
+      // without silently unpublishing the others.
+      const keep = MCP.specs.filter(s => picked.indexOf(s.table) < 0);
+      MCP.specs = keep.concat(specs);
+      wrecap(`Proposed <b>${specs.length}</b> tool${specs.length === 1 ? "" : "s"} ` +
+        `for ${picked.length} table${picked.length === 1 ? "" : "s"}` +
+        `${keep.length ? `, keeping ${keep.length} already published` : ""}.`);
+      mcpStepTools();
+    });
+}
+
+/* Step 2: the tools themselves, editable. Deliberately shows the SQL: the
+   whole point of publishing from here rather than from a config file is that
+   the person who built the pipeline can read what they are about to expose. */
+function mcpStepTools() {
+  wguide("<b>Review the tools.</b> The <i>description</i> is what the assistant " +
+    "reads to decide which tool to call &mdash; it matters more than the SQL. Test " +
+    "any tool before publishing; the test runs the same query the assistant would.",
+    "", "mcptools");
+
+  const body = MCP.specs.map((t, i) => mcpToolHtml(t, i)).join("");
+  const card = stepCard(
+    `<div style="width:100%;display:flex;flex-direction:column;gap:.55rem">${body}</div>`,
+    `Publish ${MCP.specs.length} tool${MCP.specs.length === 1 ? "" : "s"}`,
+    async c => {
+      mcpHarvest(c);
+      const keep = MCP.specs.filter((t, i) => {
+        const cb = c.querySelector(`.mcp_keep[data-i="${i}"]`);
+        return !cb || cb.checked;
+      });
+      if (!keep.length) { wfail("Nothing left to publish - tick at least one tool."); throw new Error("empty"); }
+      const res = await mcpCall("publish", { tools: keep });
+      MCP.specs = keep;
+      mcpDrawGraph(keep, res.tools || []);
+      wrecap(`Published <b>${res.count}</b> tool${res.count === 1 ? "" : "s"} at ` +
+        `<code>${esc(res.endpoint)}</code>.`);
+      // the Presenter tools picker lists what the endpoint serves; it just changed
+      if (typeof refreshMcpTools === "function") await0(refreshMcpTools(""));
+      mcpStepConnect(res);
+    });
+
+  // Test buttons act on the CURRENT textarea contents, not on what was
+  // proposed: editing the SQL and then testing the old version would be a
+  // convincing lie.
+  card.querySelectorAll(".mcp_test").forEach(b => {
+    b.onclick = async e => {
+      e.preventDefault();
+      const i = +b.dataset.i;
+      mcpHarvest(card);
+      const out = card.querySelector(`.mcp_out[data-i="${i}"]`);
+      out.innerHTML = `<span class="w_details">running...</span>`;
+      try {
+        // Send the spec, not the name: the server compiles it into a throwaway
+        // single-tool ToolSet and runs it through the same %AI path a published
+        // tool takes, so testing an edit tests the edit.
+        const res = await mcpCall("test", { tool: MCP.specs[i], args: {} });
+        mcpRenderRows(out, res);
+      } catch (err) {
+        out.innerHTML = "";   // wfail already drew the reason as a card
+      }
+    };
+  });
+}
+
+function mcpToolHtml(t, i) {
+  const ta = "width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;" +
+    "background:var(--card);color:var(--ink);border:1.5px solid var(--rule);border-radius:8px;padding:.35rem";
+  return `<div style="border:1.5px solid var(--rule);border-radius:12px;padding:.55rem .65rem">
+    <label style="display:flex;gap:.4rem;align-items:baseline">
+      <input type="checkbox" class="mcp_keep" data-i="${i}" checked>
+      <input class="mcp_name" data-i="${i}" value="${escA(t.name)}" size="28"
+             style="font-weight:700;font-size:.8rem">
+      <span class="w_details">${esc(t.table || "")}</span>
+    </label>
+    <div style="margin-top:.4rem"><span class="w_details">description &mdash; what the assistant reads</span>
+      <textarea class="mcp_desc" data-i="${i}" rows="2" style="${ta}">${esc(t.description)}</textarea></div>
+    <div style="margin-top:.35rem"><span class="w_details">SQL &mdash; SELECT only</span>
+      <textarea class="mcp_sql" data-i="${i}" rows="3" style="${ta}">${esc(t.sql)}</textarea></div>
+    <div class="wrow" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.35rem">
+      <label class="w_details">arguments
+        <input class="mcp_args" data-i="${i}" value="${escA(t.arguments || "")}" size="26"></label>
+      <label class="w_details">max rows
+        <input class="mcp_max" data-i="${i}" type="number" min="1" max="1000" value="${+t.maxRows || 200}" size="5"></label>
+      <button class="mcp_test" data-i="${i}" style="${MCPBTN}">Test</button>
+    </div>
+    <div class="mcp_out" data-i="${i}" style="margin-top:.35rem"></div>
+  </div>`;
+}
+
+/* Read every editable field back into MCP.specs. Called before publish AND
+   before test, so both act on what is on screen. */
+function mcpHarvest(card) {
+  MCP.specs.forEach((t, i) => {
+    const q = s => card.querySelector(`${s}[data-i="${i}"]`);
+    const name = q(".mcp_name"), desc = q(".mcp_desc"), sql = q(".mcp_sql");
+    const args = q(".mcp_args"), max = q(".mcp_max");
+    if (name) t.name = name.value.trim();
+    if (desc) t.description = desc.value.trim();
+    if (sql) t.sql = sql.value.trim();
+    if (args) t.arguments = args.value.trim();
+    if (max) t.maxRows = +max.value || 200;
+  });
+}
+
+/* The test result, in the same shape an MCP client receives it. truncated is
+   surfaced loudly: a truncated payload presented as a complete one is the
+   failure this whole feature has to avoid. */
+function mcpRenderRows(el, res) {
+  const cols = res.columns || [];
+  const rows = res.rows || [];
+  if (!cols.length) { el.innerHTML = `<span class="w_details">no columns returned</span>`; return; }
+  const exec = EXEC();
+  const head = cols.map(c => exec
+    ? `<th>${esc(pvwLabel(c.name))}</th>`
+    : `<th><span class="cname">${esc(c.name)}</span><span class="ctype">${esc(c.type || "")}</span></th>`).join("");
+  const body = rows.length
+    ? rows.slice(0, 12).map(r => "<tr>" + cols.map(c => {
+        const v = r ? r[c.name] : undefined;
+        return `<td class="${exec && pvwIsNum(v) ? "num" : ""}">${pvwCell(v, exec)}</td>`;
+      }).join("") + "</tr>").join("")
+    : `<tr><td colspan="${cols.length}"><span class="nul">the query is valid but returned no rows</span></td></tr>`;
+  el.innerHTML =
+    `<div class="pvw">
+       <div class="pvwhead">
+         <span class="pvwtitle">What the assistant receives</span>
+         <span class="pvwcount">${res.row_count} row${res.row_count === 1 ? "" : "s"}` +
+           `${res.truncated ? " &middot; TRUNCATED at the row cap" : ""}` +
+           `${res.elapsed_ms === undefined ? "" : " &middot; " + res.elapsed_ms + " ms"}</span>
+       </div>
+       <div class="pvwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+     </div>`;
+}
+
+/* Step 3: how to reach it. The snippets are the whole handover - a tool list
+   nobody can connect to is not a feature. */
+function mcpStepConnect(res) {
+  const ep = res.endpoint || MCP.endpoint;
+  const toml = `endpoints = [{ path = "${ep}" }]`;
+  const cfg = JSON.stringify({
+    mcpServers: {
+      "iris-data-integration": {
+        command: "docker",
+        args: ["exec", "-i", "irisetlwizard-iris-1", "/usr/irissys/bin/iris-mcp-server",
+               "--transport=stdio", "--config=/opt/irisbuild/config.toml", "run"]
+      }
+    }
+  }, null, 2);
+  const pre = "background:var(--card);border:1.5px solid var(--rule);border-radius:8px;" +
+    "padding:.4rem;font-size:.7rem;overflow-x:auto;white-space:pre";
+  const card = wmsg("formcard",
+    `<div style="width:100%">
+       <b>Connect an assistant</b>
+       <div class="w_details">1 &middot; add the endpoint to <code>src-iris/config.toml</code>:</div>
+       <div style="${pre}" class="mcp_toml">${esc(toml)}</div>
+       <div class="w_details" style="margin-top:.4rem">2 &middot; point the client at the MCP server:</div>
+       <div style="${pre}" class="mcp_cfg">${esc(cfg)}</div>
+       <div class="wrow" style="display:flex;gap:.5rem;margin-top:.45rem">
+         <button class="mcp_copy1" style="${MCPBTN}">Copy endpoint line</button>
+         <button class="mcp_copy2" style="${MCPBTN}">Copy client config</button>
+       </div>
+       <div class="w_details" style="margin-top:.5rem">
+         The tool list is read when the MCP server connects, so after publishing again,
+         reconnect the server in your client to pick up the change. If calls start
+         failing with <code>Broken pipe</code> while the tool list still looks healthy,
+         that is a stale pooled connection &mdash; reconnect and it clears.
+       </div>
+     </div>`);
+  const copy = (btn, text) => {
+    btn.onclick = e => {
+      e.preventDefault();
+      navigator.clipboard.writeText(text).then(
+        () => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = btn.dataset.lab; }, 1400); },
+        () => { btn.textContent = "Copy failed"; });
+    };
+  };
+  const b1 = card.querySelector(".mcp_copy1"), b2 = card.querySelector(".mcp_copy2");
+  b1.dataset.lab = b1.textContent; b2.dataset.lab = b2.textContent;
+  copy(b1, toml); copy(b2, cfg);
+
+  wguide("Ask the assistant something like <i>&ldquo;chart revenue by country from " +
+    "the Data Integration tables&rdquo;</i>. It will call the schema tool first, then " +
+    "the grouped-totals tool, and draw the chart from what comes back.");
+}
+
+/* The right pane: not a pipeline, an inventory. Each table fans out into the
+   tools published over it, and every tool feeds the one endpoint. */
+function mcpDrawGraph(specs, tools) {
+  nodes.clear(); edges.length = 0;
+  const byName = {};
+  (specs || []).forEach(s => { byName[s.name] = s; });
+  const tbls = new Set();
+  const list = (tools && tools.length) ? tools.map(t => t.name) : (specs || []).map(s => s.name);
+
+  list.forEach(name => {
+    const spec = byName[name] || {};
+    const tbl = spec.table || "";
+    if (tbl) {
+      const tid = "mcp:tbl:" + tbl;
+      if (!tbls.has(tbl)) {
+        tbls.add(tbl);
+        nodes.set(tid, { nodeId: tid, name: tbl, kind: "target", status: "succeeded", order: 7 });
+      }
+      edges.push({ from: tid, to: "mcp:tool:" + name, label: "" });
+    }
+    nodes.set("mcp:tool:" + name, {
+      nodeId: "mcp:tool:" + name, name: name, kind: "mcp_tool", status: "succeeded",
+      detail: (spec.arguments || ""), order: 10
+    });
+    edges.push({ from: "mcp:tool:" + name, to: "mcp:endpoint", label: "" });
+  });
+  if (list.length) {
+    nodes.set("mcp:endpoint", { nodeId: "mcp:endpoint", name: MCP.endpoint,
+      kind: "mcp_endpoint", status: "succeeded", detail: "MCP", order: 11 });
+  }
+  graphFrozen = true; wizGraphActive = false;
+  renderGraph();
+  $("runbanner").innerHTML = list.length
+    ? `<b>${list.length}</b> tool${list.length === 1 ? "" : "s"} at <b>${esc(MCP.endpoint)}</b>`
+    : "Nothing published yet.";
+}
+
 async function renderEtlTab() {
   await ensureOpt();
   // offerTransformChoice reads /wizard/:runId/mounted; before a session exists
@@ -4462,6 +4900,7 @@ refreshModels();
 refreshPipelines();
 refreshTables();
 refreshMlModels();
+refreshMcpTools();
 
 /* keep the conversation pinned to the newest message unless the user scrolled up */
 (function () {

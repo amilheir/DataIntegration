@@ -27,4 +27,9 @@ do ##class(ETLWizard.Setup).SetAgentModel(##class(ETLWizard.Setup).#DEFAULTAGENT
 do ##class(ETLWizard.Setup).CreateGatewayConnection()
 do ##class(ETLWizard.Setup).CreateRoles()
 
+// The MCP endpoint (/mcp/irisaihub) and its service class, so a clean
+// rebuild comes up with the endpoint present. It serves no tools until the
+// MCP Tools tab publishes some, which is the same state as a fresh install.
+do ##class(ETLWizard.MCP.Publisher).EnsureService()
+
 halt

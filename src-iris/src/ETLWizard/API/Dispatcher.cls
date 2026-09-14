@@ -41,6 +41,13 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
   <Route Url="/ml/custom/read" Method="POST" Call="MLCustomRead"/>
   <Route Url="/ml/custom/save" Method="POST" Call="MLCustomSave"/>
   <Route Url="/ml/custom/delete" Method="POST" Call="MLCustomDelete"/>
+  <Route Url="/mcp/publishable" Method="GET" Call="MCPPublishable"/>
+  <Route Url="/mcp/propose" Method="POST" Call="MCPPropose"/>
+  <Route Url="/mcp/publish" Method="POST" Call="MCPPublish"/>
+  <Route Url="/mcp/published" Method="GET" Call="MCPPublished"/>
+  <Route Url="/mcp/test" Method="POST" Call="MCPTest"/>
+  <Route Url="/mcp/unpublish" Method="POST" Call="MCPUnpublish"/>
+  <Route Url="/mcp/clear" Method="POST" Call="MCPClear"/>
   <Route Url="/pipeline/:id" Method="GET" Call="GetPipeline"/>
   <Route Url="/pipeline/:id" Method="DELETE" Call="DeletePipeline"/>
   <Route Url="/pipeline/:id/rename" Method="POST" Call="RenamePipeline"/>
@@ -1065,8 +1072,13 @@ ClassMethod ClearAll() As %Status
                 }
             }
         }
+        // Every published MCP tool reads one of the tables just dropped, so
+        // leaving them published would leave an endpoint whose every call
+        // fails. Unpublish rather than serve broken tools.
+        Set mcp = ##class(ETLWizard.MCP.Publisher).Clear()
         Return ..WriteJSON({"pipelines": (pipelines), "runs": (runs),
                             "tablesDropped": (dropped.%Size()), "dropped": (dropped), "failed": (failed),
+                            "mcpCleared": (mcp.%Get("cleared", 0)),
                             "note": "SQL Gateway connections, foreign servers and the sample-data feed were kept"})
     } Catch ex {
         Return ..WriteError(ex.DisplayString())
@@ -1112,6 +1124,7 @@ ClassMethod GetPipeline(id As %String) As %Status
         // still return the pipeline rather than a 500.
         Do ..AddWatermark(id, json)
         Do ..AddTargetFacts(json)
+        Do ..AddIntegrationTiming(json)
         Return ..WriteJSON(json)
     } Catch ex {
         Return ..WriteError(ex.DisplayString())
@@ -1135,6 +1148,102 @@ ClassMethod AddWatermark(id As %String, json As %DynamicObject) [ Internal ]
 /// json.target = {table, rowCount, quarantineTable, quarantineRows, sample}.
 /// Reads the target named in the pipeline's own metadata (meta.layers.target);
 /// omits any field it cannot actually read.
+/// End-to-end integration time, measured the way the production actually ran:
+/// from the Extract business service creating the first message of a session to
+/// the Load business operation finishing the last one.
+///
+/// One session = one pass of the pipeline, and it carries exactly four message
+/// headers: Extract->Orchestrate, Orchestrate->Load, and the two responses back.
+/// So the two ends are unambiguous:
+///   start = TimeCreated   of the message whose SOURCE is <base>_Extract
+///   end   = TimeProcessed of the message whose TARGET is <base>_Load
+/// Anything wider (min/max over the whole session) would fold the response
+/// legs back in and report a longer run than the data movement took.
+///
+/// Reports the most recent completed pass plus an average over the last ten, so
+/// a single slow run reads as a single slow run rather than as the new normal.
+/// Omitted entirely when the pipeline has never run through a production - an
+/// absent figure is honest, a zero would not be.
+ClassMethod AddIntegrationTiming(json As %DynamicObject) [ Internal ]
+{
+    Try {
+        Set table = ""
+        If $IsObject(json.%Get("metadata", "")), $IsObject(json.metadata.%Get("layers", "")) {
+            Set table = json.metadata.layers.%Get("target", "")
+        }
+        If table = "" {
+            Return
+        }
+        Set base = $Piece(table, ".", 2)
+        If '##class(ETLWizard.Tools.Util).ValidIdent(base) {
+            Return
+        }
+        Set extractItem = base _ "_Extract", loadItem = base _ "_Load"
+        Set stmt = ##class(%SQL.Statement).%New()
+        Set sc = stmt.%Prepare("SELECT TOP 10 e.SessionId, e.TimeCreated, l.TimeProcessed " _
+            "FROM Ens.MessageHeader e, Ens.MessageHeader l " _
+            "WHERE l.SessionId = e.SessionId AND e.SourceConfigName = ? AND l.TargetConfigName = ? " _
+            "ORDER BY e.SessionId DESC")
+        If $$$ISERR(sc) {
+            Return
+        }
+        Set rs = stmt.%Execute(extractItem, loadItem)
+        Set recent = [], total = 0, n = 0
+        Set latestId = "", latestStart = "", latestEnd = "", latestSecs = ""
+        While rs.%Next() {
+            Set sid = rs.%GetData(1), startAt = rs.%GetData(2), endAt = rs.%GetData(3)
+            // TimeProcessed is empty while a pass is still in flight, and stays
+            // empty on one that failed before the Load completed. Neither has an
+            // end-to-end time to report.
+            If (startAt = "") || (endAt = "") {
+                Continue
+            }
+            Set secs = ..ElapsedSeconds(startAt, endAt)
+            If secs < 0 {
+                Continue
+            }
+            Do recent.%Push({"sessionId": (sid), "startedAt": (startAt),
+                             "finishedAt": (endAt), "seconds": (secs)})
+            Set total = total + secs, n = n + 1
+            If latestId = "" {
+                Set latestId = sid, latestStart = startAt, latestEnd = endAt, latestSecs = secs
+            }
+        }
+        If n = 0 {
+            Return
+        }
+        Set json.integration = {
+            "seconds": (latestSecs),
+            "startedAt": (latestStart),
+            "finishedAt": (latestEnd),
+            "sessionId": (latestId),
+            "extractItem": (extractItem),
+            "loadItem": (loadItem),
+            "sampled": (n),
+            "averageSeconds": ($Number(total / n, 3)),
+            "recent": (recent)
+        }
+    } Catch {
+        // no production, no Ens tables, or a header shape we do not recognise:
+        // omit the field rather than show a duration that is not measured
+    }
+}
+
+/// Seconds between two %TimeStamp values, to the millisecond.
+/// $ZDateTimeH(.., 3, 1, 3) yields "days,seconds.fff", which subtracts cleanly
+/// across a midnight boundary where comparing the time parts alone would not.
+ClassMethod ElapsedSeconds(startAt As %String, endAt As %String) As %Numeric [ Internal ]
+{
+    Try {
+        Set h1 = $ZDateTimeH(startAt, 3, 1, 3), h2 = $ZDateTimeH(endAt, 3, 1, 3)
+        Set secs = (($Piece(h2, ",", 1) - $Piece(h1, ",", 1)) * 86400) +
+                   ($Piece(h2, ",", 2) - $Piece(h1, ",", 2))
+        Return $Number(secs, 3)
+    } Catch {
+        Return -1
+    }
+}
+
 ClassMethod AddTargetFacts(json As %DynamicObject) [ Internal ]
 {
     Try {
@@ -2156,6 +2265,151 @@ ClassMethod WizardBulkDeploy(runId As %String) As %Status
         }
         Set loadObj = ..ParseOr(res)
         Return ..WriteJSON({"deploy": ("bulk load"), "production": (prodMsg), "load": (loadObj)})
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+// ------------------------------------------------------------------ MCP tab
+//
+// Publishing target tables as MCP tools (mds/mcp-tab-plan.md). Every route is
+// a thin wrapper over ETLWizard.MCP.Publisher, which owns the validation - the
+// published tools are reachable by an MCP client with no approval step, so the
+// guard belongs in one place and not in the request handler.
+
+/// Target tables available to publish.
+ClassMethod MCPPublishable() As %Status
+{
+    Try {
+        Return ..WriteJSON({"tables": (##class(ETLWizard.MCP.Publisher).ListPublishable())})
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Default tool specs for one table, for the user to edit before publishing.
+ClassMethod MCPPropose() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set table = $ZStrip(body.%Get("table", ""), "<>W")
+        If table = "" {
+            Return ..WriteError("table is required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.MCP.Publisher).ProposeTools(table)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Publish the given tool specs. A validation failure is the user's mistake,
+/// so it comes back as a 400 with the reason, not a 500.
+ClassMethod MCPPublish() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set tools = body.%Get("tools")
+        If '$IsObject(tools) || (tools.%Size() = 0) {
+            Return ..WriteError("pick at least one tool to publish", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.MCP.Publisher).Publish(tools)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// What the endpoint currently serves, plus the spec it was built from.
+ClassMethod MCPPublished() As %Status
+{
+    Try {
+        Return ..WriteJSON(##class(ETLWizard.MCP.Publisher).Published())
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Run one published tool in process - the same path an MCP client takes.
+ClassMethod MCPTest() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set args = body.%Get("args")
+        If '$IsObject(args) {
+            Set args = {}
+        }
+        // A spec sent as `tool` is tested as it stands, published or not - the
+        // tab's Test button acts on what is in the textareas, which is the only
+        // thing that makes testing an edit meaningful.
+        Set tool = body.%Get("tool")
+        If $IsObject(tool) {
+            Set res = ##class(ETLWizard.MCP.Publisher).PreviewTool(tool, args)
+            If res.%Get("error", "") '= "" {
+                Return ..WriteError(res.error, "400 Bad Request")
+            }
+            Return ..WriteJSON(res)
+        }
+        Set name = $ZStrip(body.%Get("name", ""), "<>W")
+        If name = "" {
+            Return ..WriteError("name or tool is required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.MCP.Publisher).TestTool(name, args)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Drop one tool and republish the rest.
+ClassMethod MCPUnpublish() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set name = $ZStrip(body.%Get("name", ""), "<>W")
+        If name = "" {
+            Return ..WriteError("name is required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.MCP.Publisher).Unpublish(name)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Publish nothing - the endpoint stops offering tools.
+ClassMethod MCPClear() As %Status
+{
+    Try {
+        Set res = ##class(ETLWizard.MCP.Publisher).Clear()
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error)
+        }
+        Return ..WriteJSON(res)
     } Catch ex {
         Return ..WriteError(ex.DisplayString())
     }

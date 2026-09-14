@@ -5,7 +5,10 @@ transport = "stdio"
 name   = "local"
 server = { host = "localhost", port = 1972, username = "_SYSTEM", password = "SYS" }
 pool   = { min = 2, max = 10 }
-endpoints = [{ path = "/mcp/teste1" }]
+# /mcp/irisaihub is the fixed endpoint the MCP Tools tab publishes to. Its
+# tool list is regenerated in place on every publish, so this line never
+# needs to change again - only a client reconnect picks up new tools.
+endpoints = [{ path = "/mcp/teste1" }, { path = "/mcp/irisaihub" }]
 
 [logging]
 level  = "debug"
