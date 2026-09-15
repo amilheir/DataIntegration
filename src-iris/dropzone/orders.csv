@@ -1,0 +1,141 @@
+order_id,product_id,customer_name,region,channel,quantity,unit_price,order_total,order_date,status
+5001,603,Tomas Lindqvist,South,Online Store,2,85.00,170.00,2026-08-18,completed
+5002,703,Ines Rocha,East,Retail Store,1,265.00,265.00,2026-05-29,pending
+5003,702,Marek Novak,North,Online Store,4,45.00,180.00,2026-02-14,completed
+5004,301,Sara Nilsen,West,Marketplace,2,210.00,420.00,2026-06-21,returned
+5005,202,Petr Havel,East,Retail Store,2,129.00,258.00,2026-03-27,cancelled
+5006,301,Tomas Lindqvist,East,Marketplace,1,210.00,210.00,2026-02-13,completed
+5007,201,Clara Dubois,North,Retail Store,1,179.00,179.00,2026-08-27,completed
+5008,203,Ruben Silva,North,Retail Store,3,340.00,1020.00,2026-02-17,completed
+5009,502,Diego Alvarez,East,Marketplace,1,140.00,140.00,2026-03-17,completed
+5010,703,Yusuf Demir,West,Online Store,3,265.00,795.00,2026-02-04,cancelled
+5011,101,Tomas Lindqvist,South,Phone Order,3,249.00,747.00,2026-01-19,completed
+5012,404,Hugo Martins,Central,Phone Order,4,740.00,2960.00,2026-05-26,returned
+5013,403,Ines Rocha,South,Retail Store,2,430.00,860.00,2026-03-26,completed
+5014,602,Marek Novak,South,Retail Store,2,58.00,116.00,2026-04-27,returned
+5015,201,Hugo Martins,South,Marketplace,1,179.00,179.00,2026-09-01,returned
+5016,302,Diego Alvarez,Central,Retail Store,1,145.00,145.00,2026-03-24,completed
+5017,104,Marek Novak,East,Phone Order,2,89.00,178.00,2026-01-09,pending
+5018,203,Oscar Lindgren,West,Online Store,3,340.00,1020.00,2026-03-28,completed
+5019,602,Nils Andersen,East,Marketplace,2,58.00,116.00,2026-09-11,returned
+5020,303,Clara Dubois,East,Online Store,1,175.00,175.00,2026-02-26,cancelled
+5021,404,Tomas Lindqvist,West,Retail Store,1,740.00,740.00,2026-06-23,cancelled
+5022,101,Jonas Weber,East,Retail Store,3,249.00,747.00,2026-06-06,cancelled
+5023,101,Ines Rocha,South,Marketplace,4,249.00,996.00,2026-04-24,completed
+5024,204,Priya Raman,West,Retail Store,3,64.00,192.00,2026-05-28,completed
+5025,204,Nadia Haddad,South,Phone Order,2,64.00,128.00,2026-05-01,completed
+5026,301,Maya Sorensen,Central,Retail Store,1,210.00,210.00,2026-07-28,completed
+5027,404,Diego Alvarez,West,Phone Order,3,740.00,2220.00,2026-06-13,completed
+5028,403,Petr Havel,East,Online Store,1,430.00,430.00,2026-02-22,returned
+5029,601,Yusuf Demir,South,Retail Store,4,110.00,440.00,2026-08-18,completed
+5030,601,Jonas Weber,North,Retail Store,3,110.00,330.00,2026-03-12,completed
+5031,104,Ines Rocha,Central,Online Store,2,89.00,178.00,2026-07-11,completed
+5032,103,Priya Raman,North,Marketplace,1,159.00,159.00,2026-03-13,completed
+5033,104,Maya Sorensen,West,Online Store,2,89.00,178.00,2026-02-01,cancelled
+5034,601,Hugo Martins,Central,Phone Order,2,110.00,220.00,2026-06-16,completed
+5035,601,Jonas Weber,Central,Online Store,1,110.00,110.00,2026-03-11,completed
+5036,301,Diego Alvarez,North,Marketplace,2,210.00,420.00,2026-03-04,cancelled
+5037,404,Elena Costa,West,Retail Store,1,740.00,740.00,2026-05-04,completed
+5038,404,Ines Rocha,North,Marketplace,3,740.00,2220.00,2026-07-03,cancelled
+5039,303,Hugo Martins,West,Retail Store,2,175.00,350.00,2026-06-11,completed
+5040,102,Aoife Byrne,North,Phone Order,1,389.00,389.00,2026-06-05,pending
+5041,402,Diego Alvarez,East,Online Store,2,880.00,1760.00,2026-05-24,cancelled
+5042,202,Oscar Lindgren,West,Phone Order,4,129.00,516.00,2026-08-12,returned
+5043,201,Hanna Koivisto,West,Marketplace,2,179.00,358.00,2026-04-03,completed
+5044,403,Priya Raman,North,Online Store,3,430.00,1290.00,2026-08-03,pending
+5045,302,Sara Nilsen,South,Marketplace,1,145.00,145.00,2026-05-09,completed
+5046,201,Ines Rocha,Central,Retail Store,1,179.00,179.00,2026-07-01,completed
+5047,403,Lucia Ferrari,East,Phone Order,2,430.00,860.00,2026-07-14,completed
+5048,404,Yusuf Demir,Central,Retail Store,3,740.00,2220.00,2026-07-18,returned
+5049,101,Yusuf Demir,North,Retail Store,1,249.00,249.00,2026-01-06,pending
+5050,601,Diego Alvarez,West,Online Store,2,110.00,220.00,2026-08-06,completed
+5051,403,Hugo Martins,North,Online Store,1,430.00,430.00,2026-07-17,cancelled
+5052,401,Lucia Ferrari,East,Online Store,1,620.00,620.00,2026-08-25,cancelled
+5053,702,Hanna Koivisto,North,Marketplace,4,45.00,180.00,2026-05-09,cancelled
+5054,404,Petr Havel,South,Online Store,1,740.00,740.00,2026-07-30,pending
+5055,302,Ruben Silva,North,Phone Order,1,145.00,145.00,2026-02-09,completed
+5056,603,Nadia Haddad,Central,Marketplace,1,85.00,85.00,2026-06-27,completed
+5057,204,Diego Alvarez,North,Retail Store,2,64.00,128.00,2026-07-22,completed
+5058,302,Elena Costa,East,Retail Store,1,145.00,145.00,2026-06-13,pending
+5059,703,Nils Andersen,East,Retail Store,2,265.00,530.00,2026-01-18,pending
+5060,403,Jonas Weber,Central,Phone Order,1,430.00,430.00,2026-08-25,pending
+5061,104,Ines Rocha,East,Retail Store,3,89.00,267.00,2026-05-26,completed
+5062,201,Tomas Lindqvist,West,Phone Order,2,179.00,358.00,2026-02-21,returned
+5063,201,Ines Rocha,Central,Phone Order,2,179.00,358.00,2026-08-07,completed
+5064,402,Hanna Koivisto,Central,Retail Store,4,880.00,3520.00,2026-07-01,pending
+5065,502,Tomas Lindqvist,South,Marketplace,1,140.00,140.00,2026-02-25,cancelled
+5066,701,Elena Costa,West,Phone Order,2,195.00,390.00,2026-07-03,completed
+5067,603,Clara Dubois,East,Retail Store,2,85.00,170.00,2026-08-29,completed
+5068,401,Sara Nilsen,North,Marketplace,2,620.00,1240.00,2026-02-20,returned
+5069,501,Petr Havel,East,Retail Store,2,220.00,440.00,2026-06-25,completed
+5070,701,Marek Novak,West,Phone Order,2,195.00,390.00,2026-07-20,cancelled
+5071,603,Elena Costa,East,Retail Store,2,85.00,170.00,2026-05-07,cancelled
+5072,203,Maya Sorensen,Central,Phone Order,1,340.00,340.00,2026-03-03,completed
+5073,703,Ruben Silva,East,Retail Store,1,265.00,265.00,2026-04-18,completed
+5074,502,Nadia Haddad,East,Phone Order,2,140.00,280.00,2026-03-11,completed
+5075,603,Diego Alvarez,Central,Phone Order,1,85.00,85.00,2026-01-06,pending
+5076,103,Ruben Silva,Central,Online Store,4,159.00,636.00,2026-05-03,returned
+5077,502,Tomas Lindqvist,Central,Marketplace,2,140.00,280.00,2026-03-24,completed
+5078,201,Aoife Byrne,South,Online Store,1,179.00,179.00,2026-08-18,cancelled
+5079,204,Aoife Byrne,West,Retail Store,1,64.00,64.00,2026-04-06,pending
+5080,101,Petr Havel,West,Marketplace,1,249.00,249.00,2026-02-17,returned
+5081,703,Hanna Koivisto,West,Online Store,1,265.00,265.00,2026-02-03,completed
+5082,404,Ines Rocha,East,Retail Store,4,740.00,2960.00,2026-07-31,cancelled
+5083,103,Hugo Martins,Central,Online Store,2,159.00,318.00,2026-09-12,completed
+5084,302,Yusuf Demir,North,Retail Store,1,145.00,145.00,2026-08-27,completed
+5085,601,Sara Nilsen,Central,Phone Order,1,110.00,110.00,2026-06-21,completed
+5086,102,Ruben Silva,West,Marketplace,1,389.00,389.00,2026-07-17,completed
+5087,402,Marek Novak,West,Online Store,3,880.00,2640.00,2026-04-22,completed
+5088,103,Ines Rocha,Central,Marketplace,2,159.00,318.00,2026-06-28,returned
+5089,204,Yusuf Demir,East,Retail Store,1,64.00,64.00,2026-08-01,completed
+5090,602,Diego Alvarez,South,Marketplace,1,58.00,58.00,2026-05-30,completed
+5091,103,Lucia Ferrari,North,Retail Store,4,159.00,636.00,2026-03-31,cancelled
+5092,302,Lucia Ferrari,West,Online Store,2,145.00,290.00,2026-08-06,pending
+5093,203,Sara Nilsen,South,Marketplace,3,340.00,1020.00,2026-06-17,pending
+5094,403,Nils Andersen,South,Online Store,3,430.00,1290.00,2026-05-31,completed
+5095,602,Hugo Martins,East,Retail Store,2,58.00,116.00,2026-07-09,pending
+5096,401,Yusuf Demir,North,Retail Store,3,620.00,1860.00,2026-03-19,returned
+5097,401,Aoife Byrne,North,Phone Order,2,620.00,1240.00,2026-06-05,completed
+5098,204,Priya Raman,East,Online Store,1,64.00,64.00,2026-08-03,pending
+5099,301,Priya Raman,North,Retail Store,2,210.00,420.00,2026-03-04,completed
+5100,403,Hanna Koivisto,East,Marketplace,1,430.00,430.00,2026-03-01,completed
+5101,102,Jonas Weber,East,Marketplace,1,389.00,389.00,2026-09-05,cancelled
+5102,103,Aoife Byrne,South,Phone Order,4,159.00,636.00,2026-01-27,cancelled
+5103,603,Nils Andersen,Central,Phone Order,1,85.00,85.00,2026-05-05,completed
+5104,302,Ines Rocha,South,Online Store,1,145.00,145.00,2026-09-01,cancelled
+5105,203,Jonas Weber,West,Online Store,2,340.00,680.00,2026-06-14,cancelled
+5106,702,Ruben Silva,East,Phone Order,3,45.00,135.00,2026-06-22,completed
+5107,602,Hugo Martins,West,Phone Order,2,58.00,116.00,2026-05-10,completed
+5108,602,Diego Alvarez,West,Online Store,2,58.00,116.00,2026-07-02,cancelled
+5109,102,Jonas Weber,West,Online Store,1,389.00,389.00,2026-08-15,completed
+5110,703,Hugo Martins,Central,Phone Order,1,265.00,265.00,2026-02-14,completed
+5111,102,Yusuf Demir,West,Online Store,3,389.00,1167.00,2026-02-01,returned
+5112,301,Petr Havel,South,Online Store,1,210.00,210.00,2026-07-07,cancelled
+5113,101,Petr Havel,Central,Marketplace,3,249.00,747.00,2026-05-03,cancelled
+5114,603,Diego Alvarez,North,Marketplace,2,85.00,170.00,2026-08-07,completed
+5115,401,Elena Costa,Central,Online Store,2,620.00,1240.00,2026-04-24,cancelled
+5116,301,Hanna Koivisto,South,Online Store,1,210.00,210.00,2026-09-03,returned
+5117,502,Hugo Martins,West,Phone Order,2,140.00,280.00,2026-07-21,completed
+5118,502,Diego Alvarez,West,Online Store,2,140.00,280.00,2026-08-21,returned
+5119,102,Elena Costa,South,Retail Store,3,389.00,1167.00,2026-08-22,completed
+5120,603,Elena Costa,North,Phone Order,3,85.00,255.00,2026-02-01,completed
+5121,104,Nils Andersen,East,Retail Store,2,89.00,178.00,2026-03-25,returned
+5122,102,Diego Alvarez,North,Online Store,1,389.00,389.00,2026-03-04,pending
+5123,404,Jonas Weber,North,Phone Order,2,740.00,1480.00,2026-02-05,returned
+5124,301,Tomas Lindqvist,West,Marketplace,2,210.00,420.00,2026-01-18,completed
+5125,102,Lucia Ferrari,East,Retail Store,1,389.00,389.00,2026-07-28,completed
+5126,303,Nadia Haddad,West,Online Store,1,175.00,175.00,2026-06-16,completed
+5127,104,Hugo Martins,North,Retail Store,2,89.00,178.00,2026-05-23,completed
+5128,401,Nadia Haddad,North,Retail Store,1,620.00,620.00,2026-09-03,completed
+5129,301,Yusuf Demir,South,Online Store,3,210.00,630.00,2026-09-05,completed
+5130,702,Priya Raman,South,Online Store,1,45.00,45.00,2026-06-11,completed
+5131,202,Nadia Haddad,North,Phone Order,1,129.00,129.00,2026-01-13,completed
+5132,201,Oscar Lindgren,South,Online Store,1,179.00,179.00,2026-01-22,completed
+5133,103,Marek Novak,West,Retail Store,2,159.00,318.00,2026-05-16,completed
+5134,503,Yusuf Demir,South,Retail Store,2,95.00,190.00,2026-01-17,pending
+5135,103,Petr Havel,West,Phone Order,3,159.00,477.00,2026-06-07,pending
+5136,103,Ines Rocha,North,Phone Order,1,159.00,159.00,2026-06-01,returned
+5137,501,Elena Costa,Central,Online Store,2,220.00,440.00,2026-04-20,completed
+5138,601,Oscar Lindgren,South,Marketplace,4,110.00,440.00,2026-09-08,cancelled
+5139,402,Hanna Koivisto,Central,Marketplace,1,880.00,880.00,2026-08-24,completed
+5140,403,Aoife Byrne,East,Online Store,2,430.00,860.00,2026-07-27,completed

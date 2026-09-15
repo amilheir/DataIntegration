@@ -2,7 +2,6 @@ src-iris/data/
 src-iris/iris-main.log
 src-iris/.venv/
 src-iris/jdbc/
-src-iris/dropzone/
 __pycache__/
 node_modules/
 *.log
