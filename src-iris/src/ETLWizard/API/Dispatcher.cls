@@ -41,6 +41,20 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
   <Route Url="/ml/custom/read" Method="POST" Call="MLCustomRead"/>
   <Route Url="/ml/custom/save" Method="POST" Call="MLCustomSave"/>
   <Route Url="/ml/custom/delete" Method="POST" Call="MLCustomDelete"/>
+  <Route Url="/kg/candidates" Method="GET" Call="KGCandidates"/>
+  <Route Url="/kg/profile" Method="POST" Call="KGProfile"/>
+  <Route Url="/kg/start" Method="POST" Call="KGStart"/>
+  <Route Url="/kg/corpus" Method="GET" Call="KGList"/>
+  <Route Url="/kg/models" Method="GET" Call="KGModels"/>
+  <Route Url="/kg/models/select" Method="POST" Call="KGSelectModel"/>
+  <Route Url="/kg/search" Method="POST" Call="KGSearch"/>
+  <Route Url="/kg/ask" Method="POST" Call="KGAsk"/>
+  <Route Url="/kg/ask/:id" Method="GET" Call="KGAskPoll"/>
+  <Route Url="/kg/corpus/:id" Method="GET" Call="KGStatus"/>
+  <Route Url="/kg/corpus/:id/run" Method="POST" Call="KGRun"/>
+  <Route Url="/kg/corpus/:id/cancel" Method="POST" Call="KGCancel"/>
+  <Route Url="/kg/corpus/:id/drop" Method="POST" Call="KGDrop"/>
+  <Route Url="/kg/corpus/:id/graph" Method="GET" Call="KGGraph"/>
   <Route Url="/mcp/publishable" Method="GET" Call="MCPPublishable"/>
   <Route Url="/mcp/propose" Method="POST" Call="MCPPropose"/>
   <Route Url="/mcp/publish" Method="POST" Call="MCPPublish"/>
@@ -219,9 +233,21 @@ ClassMethod ReadBody() As %DynamicObject
     Return body
 }
 
+/// Modification time of the served index.html, used by the page to notice that
+/// the UI it is running is no longer the UI on disk.
+ClassMethod UiVersion() As %String [ Internal ]
+{
+    Try {
+        Return ##class(%File).GetFileDateModified("/opt/irisbuild/frontend/index.html")
+    } Catch {
+        Return ""
+    }
+}
+
 ClassMethod Ping() As %Status
 {
-    Return ..WriteJSON({"status":"ok", "namespace":($Namespace), "version":($ZVersion)})
+    Return ..WriteJSON({"status":"ok", "namespace":($Namespace), "version":($ZVersion),
+                        "uiVersion":(..UiVersion())})
 }
 
 /// Allowed source types + capability metadata (spec §3.1)
@@ -1076,9 +1102,15 @@ ClassMethod ClearAll() As %Status
         // leaving them published would leave an endpoint whose every call
         // fails. Unpublish rather than serve broken tools.
         Set mcp = ##class(ETLWizard.MCP.Publisher).Clear()
+        // Knowledge bases are built FROM those tables, so they go with them.
+        Set kgCleared = 0
+        Try {
+            Set kgCleared = ##class(ETLWizard.KG.Ingest).DropAll()
+        } Catch {
+        }
         Return ..WriteJSON({"pipelines": (pipelines), "runs": (runs),
                             "tablesDropped": (dropped.%Size()), "dropped": (dropped), "failed": (failed),
-                            "mcpCleared": (mcp.%Get("cleared", 0)),
+                            "mcpCleared": (mcp.%Get("cleared", 0)), "kgCleared": (kgCleared),
                             "note": "SQL Gateway connections, foreign servers and the sample-data feed were kept"})
     } Catch ex {
         Return ..WriteError(ex.DisplayString())
@@ -2210,6 +2242,18 @@ ClassMethod WizardUpload(runId As %String) As %Status
             Set csvFile = conv
             Set note = "converted " _ fn _ " -> " _ csvFile
         }
+        // Repair the file shapes the loader cannot read (whole-line quoting,
+        // header names that are not identifiers) BEFORE inferring columns, so
+        // the inferred names and the file's header agree - they must, because
+        // LOAD DATA matches them by name.
+        Set nerr = ##class(ETLWizard.Tools.BulkLoad).NormalizeCsv(csvFile, ",", .cleanFile, .cleanNote)
+        If $Extract(nerr, 1, 5) = "ERROR" {
+            Return ..WriteError($Extract(nerr, 8, *))
+        }
+        If cleanFile '= "" {
+            Set csvFile = cleanFile
+            Set note = note _ $Select(note = "": "", 1: "; ") _ cleanNote
+        }
         Set inf = ..ParseOr(##class(ETLWizard.Tools.BulkLoad).InferColumns(csvFile))
         Set out = {}
         Set out.csvFile = csvFile
@@ -2238,6 +2282,15 @@ ClassMethod WizardBulkDeploy(runId As %String) As %Status
         Set bulk = +body.%Get("bulk", 1)
         Set header = +body.%Get("header", 1)
         Set separator = body.%Get("separator", ",")
+        // A file can reach here without passing through /upload (a re-deploy, or
+        // a file dropped into the dropzone by hand), so repair it here too.
+        // NormalizeCsv is a no-op on a file that is already loadable.
+        Set normalizeNote = ""
+        Set nerr = ##class(ETLWizard.Tools.BulkLoad).NormalizeCsv(fileName, separator, .cleanFile, .cleanNote)
+        If ($Extract(nerr, 1, 5) '= "ERROR") && (cleanFile '= "") {
+            Set fileName = cleanFile
+            Set normalizeNote = cleanNote
+        }
         Set res = ##class(ETLWizard.Tools.BulkLoad).Deploy(runId, base, fileName, columnDefs, strategy, bulk, header, separator)
         If $Extract(res, 1, 5) = "ERROR" {
             Return ..WriteError(res)
@@ -2248,23 +2301,240 @@ ClassMethod WizardBulkDeploy(runId As %String) As %Status
         Set meta.source = {"mode": "bulk", "file": (fileName), "columnDefs": (columnDefs),
             "strategy": (strategy), "bulk": (bulk), "header": (header), "separator": (separator)}
         Set meta.loadStrategy = {"type": "bulk"}
-        Set meta.layers = {"target": ("ETLW_TARGET." _ base)}
+        // The ingested file is a SOURCE, so it is recorded as one. Writing a
+        // `target` here would put it in front of the Knowledge Base tab and the
+        // results panel as though an ETL had produced it.
+        Set meta.layers = {"source": (##class(ETLWizard.Tools.BulkLoad).SourceTableName(base))}
         Set cat = ##class(ETLWizard.Tools.Catalog).%New()
         Set res2 = cat.SetPipelineMetadata(runId, meta.%ToJSON(), "Deployed")
         If $Extract(res2, 1, 5) = "ERROR" {
             Return ..WriteError(res2)
         }
-        Set scheduleSpec = ..ScheduleSpecFromBody(body)
-        If $Extract(scheduleSpec, 1, 5) = "ERROR" {
-            Return ..WriteError(scheduleSpec, "400 Bad Request")
-        }
-        Set prodTool = ##class(ETLWizard.Tools.Production).%New()
-        Set prodMsg = prodTool.GenerateProduction(runId, +body.%Get("pollSeconds", 300), scheduleSpec, +body.%Get("poolSize", 1))
-        If $Extract(prodMsg, 1, 5) '= "ERROR" {
-            Do prodTool.ApplyProduction(runId)
-        }
+        // NO PRODUCTION for a bulk load. The other strategies poll a source
+        // that changes underneath them; an uploaded file does not. A business
+        // service on a 300s interval would re-import the same file forever -
+        // harmless under Full reload, a duplicate every five minutes under
+        // Append. Re-importing is a deliberate act: upload again.
         Set loadObj = ..ParseOr(res)
-        Return ..WriteJSON({"deploy": ("bulk load"), "production": (prodMsg), "load": (loadObj)})
+        Return ..WriteJSON({"deploy": ("bulk load"), "load": (loadObj),
+                            "note": (normalizeNote),
+                            "production": "not created - one-off file import"})
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+// ------------------------------------------------- Knowledge Graph tab
+//
+// Thin wrappers over ETLWizard.KG.Ingest (mds/knowledge-graph-tab-plan.md).
+// Ingestion is driven one batch per request rather than one long call: a batch
+// is seconds, a full run can be hours, and the webgateway gives up at ~60s.
+
+ClassMethod KGCandidates() As %Status
+{
+    Try {
+        Return ..WriteJSON({"tables": (##class(ETLWizard.KG.Ingest).ListCandidates()),
+                            "chatModel": (##class(ETLWizard.KG.Setup).GetChatModel()),
+                            "extractModel": (##class(ETLWizard.KG.Setup).GetExtractModel())})
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGProfile() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.KG.Ingest).Profile(body.%Get("table", ""), body.%Get("column", ""))
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGStart() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        // The schema is created on demand: a fresh install has no ETLW_KG until
+        // someone actually wants one.
+        Set err = ##class(ETLWizard.KG.Setup).Install(0)
+        If $Extract(err, 1, 5) = "ERROR" {
+            Return ..WriteError($Extract(err, 8, *))
+        }
+        Set res = ##class(ETLWizard.KG.Ingest).Start(body)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGList() As %Status
+{
+    Try {
+        Return ..WriteJSON({"corpora": (##class(ETLWizard.KG.Ingest).List())})
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGStatus(id As %String) As %Status
+{
+    Try {
+        Set res = ##class(ETLWizard.KG.Ingest).Status(id)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "404 Not Found")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// One batch. The frontend calls this in a loop so progress is visible and the
+/// run can be stopped between batches.
+ClassMethod KGRun(id As %String) As %Status
+{
+    Try {
+        Set res = ##class(ETLWizard.KG.Ingest).RunBatch(id)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGCancel(id As %String) As %Status
+{
+    Try {
+        Return ..WriteJSON(##class(ETLWizard.KG.Ingest).Cancel(id))
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGDrop(id As %String) As %Status
+{
+    Try {
+        Set res = ##class(ETLWizard.KG.Ingest).Drop(id)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error)
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGGraph(id As %String) As %Status
+{
+    Try {
+        Set limit = +$Get(%request.Data("limit", 1), 200)
+        Set res = ##class(ETLWizard.KG.Ingest).Graph(id, limit)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error)
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGSearch() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.KG.Ingest).Search(body.%Get("corpusId", ""),
+            body.%Get("question", ""), +body.%Get("topN", 8))
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Queue a question. Returns immediately with an id to poll - the answering
+/// model takes tens of seconds and the gateway would time out on a direct call.
+ClassMethod KGAsk() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set res = ##class(ETLWizard.KG.Chat).Ask(body.%Get("corpusId", ""), body.%Get("question", ""))
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "400 Bad Request")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGAskPoll(id As %String) As %Status
+{
+    Try {
+        Set res = ##class(ETLWizard.KG.Chat).Poll(id)
+        If res.%Get("error", "") '= "" {
+            Return ..WriteError(res.error, "404 Not Found")
+        }
+        Return ..WriteJSON(res)
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+/// Models available in Ollama, annotated with what each will do to VRAM.
+/// A model that does not fit still answers - it just offloads to CPU and runs
+/// an order of magnitude slower, with no error. This is where that becomes
+/// visible, at the moment of choosing.
+ClassMethod KGModels() As %Status
+{
+    Try {
+        Return ..WriteJSON(##class(ETLWizard.KG.Models).List())
+    } Catch ex {
+        Return ..WriteError(ex.DisplayString())
+    }
+}
+
+ClassMethod KGSelectModel() As %Status
+{
+    Try {
+        Set body = ..ReadBody()
+        If '$IsObject(body) {
+            Return ..WriteError("JSON body required", "400 Bad Request")
+        }
+        Set role = $ZStrip(body.%Get("role", "chat"), "<>W")
+        Set model = $ZStrip(body.%Get("model", ""), "<>W")
+        If role = "extract" {
+            Set err = ##class(ETLWizard.KG.Setup).SetExtractModel(model)
+        } Else {
+            Set err = ##class(ETLWizard.KG.Setup).SetChatModel(model)
+        }
+        If err '= "" {
+            Return ..WriteError(err, "400 Bad Request")
+        }
+        Return ..WriteJSON({"role": (role), "model": (model)})
     } Catch ex {
         Return ..WriteError(ex.DisplayString())
     }

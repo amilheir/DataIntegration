@@ -203,6 +203,128 @@ input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow
 #tablelist { min-width: 7.5rem; max-width: 10rem; }
 #mlmodellist { min-width: 7.5rem; max-width: 10rem; }
 #mcptoollist { min-width: 7.5rem; max-width: 10rem; }
+#kglist { min-width: 7.5rem; max-width: 10rem; }
+
+/* ---- Knowledge graph canvas + legend (ported from wikigraph) ------------
+   The graph needs a box with a REAL height. Left to size itself inside a
+   column-flex parent it collapsed to its minimum, the viewBox stayed large, and
+   the whole constellation rendered as a few specks in a field of white.
+   .kgwrap is that box; the SVG fills it and the drawing is fitted to it. */
+.kgwrap {
+  position: relative; width: 100%; align-self: stretch;
+  /* Height comes from the pane, not from a vh guess. Guessing overshot by
+     64px: the pane grew a scrollbar and the legend, anchored to the bottom of
+     this box, sat below the fold. */
+  height: 100%; min-height: 420px;
+}
+
+/* Knowledge Base: the pane is the graph. Everything that describes a pipeline
+   run is hidden rather than left empty - an empty element still occupies its
+   margins, which is the blank band that used to sit under the graph. */
+#right.kgmode > h3,
+#right.kgmode > #results,
+#right.kgmode > #runhistory,
+#right.kgmode > #log { display: none; }
+#right.kgmode { padding-bottom: .9rem; }
+#right.kgmode > #runbanner { margin-bottom: .4rem; flex: none; }
+
+/* A flex column so #flow takes exactly the height left over after the banner -
+   no arithmetic, and correct at any window size. overflow:hidden because there
+   is nothing left to scroll to once the graph fits. */
+#right.kgmode { display: flex; flex-direction: column; overflow: hidden; }
+#right.kgmode > #flow { flex: 1 1 auto; min-height: 0; }
+
+/* Chat & Knowledge graph only: the two panes swap grounds. Reading is the work
+   on the left, so it gets the white; the constellation sits better on the
+   paper tint. Expressed with the same two tokens the rest of the app uses, so
+   the swap follows the day/night theme instead of pinning literal colours. */
+body.kgchat #left { background: var(--card); }
+body.kgchat #right { background-color: var(--paper); }
+#kgsky { display: block; width: 100%; height: 100%; }
+
+/* The constellation's visual language, ported from wikigraph.
+   The load-bearing trick is `paint-order: stroke` with a paper-coloured
+   stroke: it paints a halo the colour of the background behind every glyph, so
+   a label crossing three edges stays readable instead of dissolving into them. */
+#kgsky .kgnode { cursor: pointer; }
+#kgsky .kgnode circle { stroke: var(--card); stroke-width: 1.5; }
+#kgsky .kglabel {
+  font-family: "Newsreader", Georgia, serif; font-size: 13px; font-weight: 600;
+  fill: var(--ink); pointer-events: none; text-anchor: middle;
+  paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round;
+}
+#kgsky .kglink { stroke: var(--ink-soft); stroke-opacity: .5; stroke-width: 1; }
+#kgsky .kgpred {
+  font-family: "Newsreader", Georgia, serif; font-style: italic; font-size: 11px;
+  fill: var(--ink-soft); pointer-events: none; text-anchor: middle;
+  paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round;
+}
+
+/* Bottom-left, as in wikigraph - but anchored to the graph box rather than the
+   viewport, so it cannot drift over the chat in the other pane. */
+#kglegend:empty { display: none; }
+#kglegend {
+  position: absolute; left: .7rem; bottom: .7rem; z-index: 5;
+  max-height: 70%; overflow-y: auto;
+  padding: .6rem .75rem; border: 1.5px solid var(--rule);
+  border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
+  /* Three quarters of full size. Scaling the whole card rather than shrinking
+     each font and padding keeps every proportion - swatches, gaps, buttons -
+     exactly as designed. The origin is the corner it is anchored to, so it
+     shrinks toward the bottom-left instead of drifting away from it. */
+  transform: scale(.75);
+  transform-origin: left bottom;
+}
+#kglegend .kglh {
+  font-variant: small-caps; letter-spacing: .14em; font-size: .72rem; color: var(--ink);
+}
+#kglegend .kglhint { font-size: .72rem; color: var(--ink-soft); font-style: italic; margin-bottom: .4rem; }
+#kglegend .kglbody { display: flex; flex-direction: column; gap: .05rem; }
+.kgleg {
+  display: flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--ink);
+  padding: .2rem .4rem; cursor: pointer; border-radius: 8px; user-select: none;
+}
+.kgleg:hover { background: var(--paper-deep, rgba(0,0,0,.05)); }
+.kgleg.sel { background: color-mix(in srgb, var(--teal, #00b2a9) 18%, transparent); font-weight: 700; }
+.kgleg .sw { width: 12px; height: 12px; border-radius: 99px; flex: none; box-shadow: 0 0 0 1.5px var(--card); }
+.kgleg .n { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+#kglegend .kglacts { display: flex; flex-wrap: wrap; gap: .3rem .9rem; margin-top: .45rem; }
+#kglegend .kglbtn {
+  font-family: "Fraunces", serif; font-size: .7rem; font-weight: 700; letter-spacing: .05em;
+  color: var(--teal, #00b2a9); background: 0; border: 0; cursor: pointer; padding: .15rem 0;
+}
+#kglegend .kglbtn:hover { text-decoration: underline; }
+#kglegend .kglclear { display: none; }
+#kglegend .kglclear.show { display: inline; }
+
+/* ---- Knowledge Base: section switcher, progress, pulse ------------------
+   The switcher deliberately echoes the Technical/Executive control rather than
+   inventing a second visual language for "pick one of two". */
+.wmsg.kgnav { background: none; border: 0; box-shadow: none; padding: 0; align-self: stretch; }
+.kgnavrow { display: flex; gap: .3rem; }
+.kgnavbtn {
+  font-family: "Newsreader", serif; font-weight: 700; font-size: .76rem;
+  letter-spacing: .04em; background: var(--card); color: var(--ink-soft);
+  border: 1.5px solid var(--rule); border-radius: 10px; padding: .3rem .8rem; cursor: pointer;
+}
+.kgnavbtn.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.kgnavbtn:hover { color: var(--ink); }
+.kgnavbtn.on:hover { color: var(--paper); }
+
+/* Embedding is silent server-side work with no intermediate output, so without
+   motion a slow batch is indistinguishable from a hang. */
+.kgbar { height: 5px; background: var(--rule); border-radius: 3px; overflow: hidden; position: relative; }
+.kgbar::after {
+  content: ""; position: absolute; inset: 0; width: 35%;
+  background: linear-gradient(90deg, transparent, var(--accent, #00b2a9), transparent);
+  animation: kgsweep 1.4s linear infinite;
+}
+.kgbar.kgdone::after { display: none; }
+.kgbarfill { height: 100%; width: 0; background: var(--accent, #00b2a9); transition: width .4s ease; }
+@keyframes kgsweep { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
+.kgpulse { animation: kgblink 1.6s ease-in-out infinite; }
+@keyframes kgblink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.chat.kgstatus { font-style: italic; }
 .toolbar { gap: .35rem; }
 .toolbar .btn { padding: .36rem .6rem; }
 .toolbar select { padding: .32rem .45rem; font-size: .82rem; }
@@ -325,7 +447,7 @@ main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
 #right h3 small { font-family: "Newsreader", serif; font-variant: small-caps;
   letter-spacing: .14em; font-size: .68rem; font-weight: 400; color: var(--ink-soft); }
 #runbanner { font-variant: small-caps; letter-spacing: .1em; font-size: .82rem;
-  color: var(--ink-soft); font-style: italic; margin-bottom: .9rem; min-height: 1.1rem; }
+  color: var(--ink-soft); font-style: italic; margin-bottom: 0rem; min-height: 1.1rem; }
 #runbanner b { color: var(--teal-text); font-style: normal; }
 
 #flow { display: flex; flex-direction: column; align-items: center; gap: 0; }
@@ -702,7 +824,7 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
          to choose what gets deleted - leaving them outside put a destructive
          control's argument in the main toolbar while hiding the verb. -->
     <details id="presenterTools" class="presenterTools">
-      <summary title="Destructive actions - deleting a pipeline, dropping a table, an ML model or an MCP tool, clearing everything">Presenter tools</summary>
+      <summary title="Destructive actions - deleting a pipeline, dropping a table, an ML model, an MCP tool or a knowledge base, clearing everything">Presenter tools</summary>
       <div class="ptbody">
         <button id="delpipe" class="btn danger" title="Delete the selected pipeline (its tables are kept)">Delete Pipeline</button>
         <span class="tsep"></span>
@@ -714,6 +836,9 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
         <span class="tsep"></span>
         <select id="mcptoollist" title="Tools published to the MCP endpoint"></select>
         <button id="delmcptool" class="btn danger" title="Unpublish the selected MCP tool - the table it reads is untouched">Delete MCP Tool</button>
+        <span class="tsep"></span>
+        <select id="kglist" title="Knowledge bases: embedded text, its vectors and its graph"></select>
+        <button id="delkg" class="btn danger" title="Delete the selected knowledge base - its vectors, entities and relationships. The source table is untouched">Clear Knowledge Base</button>
         <span class="tsep"></span>
         <button id="clearall" class="btn danger" title="Delete every pipeline and every table the wizard built">Clear all</button>
       </div>
@@ -729,7 +854,8 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
     <button class="tab" id="tab_sources" data-tab="sources" role="tab">Data Sources</button>
     <button class="tab" id="tab_etl" data-tab="etl" role="tab">ETL Interop</button>
     <button class="tab" id="tab_ml" data-tab="ml" role="tab">ML Models</button>
-    <button class="tab" id="tab_mcp" data-tab="mcp" role="tab">MCP Tools</button>
+    <button class="tab" id="tab_mcp" data-tab="mcp" role="tab">AI Tools</button>
+    <button class="tab" id="tab_kg" data-tab="kg" role="tab">Knowledge Base</button>
   </div>
 </header>
 <main>
@@ -747,6 +873,7 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
     <details id="log" class="techOnly"><summary>Event log (seq-replayed)</summary><div id="events"></div></details>
   </section>
 </main>
+<script src="d3.min.js"></script>
 <script>
 "use strict";
 
@@ -800,7 +927,7 @@ const EXEC = () => VIEW === "executive";
 function sessGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
 function sessSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } }
 
-const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models", mcp: "MCP Tools" };
+const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models", mcp: "AI Tools", kg: "Knowledge Base" };
 
 function applyView() {
   document.body.setAttribute("data-view", VIEW);
@@ -1128,13 +1255,14 @@ function chatBubble(role, text) {
 
 /* ---------- Flowchart ---------- */
 const KIND_RANK = { source: 1, foreign_server: 2, foreign_table: 3, rest_client: 3,
+  source_table: 3,
   landing: 4, staging: 5, transform_view: 6, target: 7, check: 8, quarantine: 8,
   host: 9, production: 9,
   // MCP Tools tab - a target table fans out into its published tools, which
   // all feed the single endpoint
   mcp_tool: 10, mcp_endpoint: 11 };
 const KIND_LABEL = { source: "Source", foreign_server: "Foreign Server",
-  foreign_table: "Foreign Table", rest_client: "REST Client", landing: "Landing",
+  foreign_table: "Foreign Table", source_table: "Source Table", rest_client: "REST Client", landing: "Landing",
   staging: "Staging", transform_view: "Transform", target: "Target", check: "Check", load_config: "Load Config", bulk_load: "Bulk Load",
   quarantine: "Quarantine", host: "Production Host", production: "Production",
   // ML Models tab - the chart is derived live from INFORMATION_SCHEMA.ML_*
@@ -1154,7 +1282,7 @@ function subRank(n) {
 
 // The data-input kinds that fan INTO the transform — drawn as one cluster so a
 // multi-table ETL reads as "these tables feed the transform", not a chain.
-const SOURCE_KINDS = new Set(["source", "foreign_table", "rest_client", "ml_source"]);
+const SOURCE_KINDS = new Set(["source", "foreign_table", "source_table", "rest_client", "ml_source"]);
 
 function fcConn(lab) {
   return `<div class="fcconn"><span class="fcarrow">&#8595;</span>` +
@@ -1702,6 +1830,7 @@ const EXECGUIDE = {
   mlmodel:    "Name the model, pick the table it learns from, and choose what you want it to predict.",
   mltrain:    "Training runs in the background, so this stays responsive while it works.",
   mlvalidate: "Score the model against real data and read the result.",
+  kg:         "Turn free text &mdash; descriptions, feedback, notes &mdash; into something the database can search by meaning, and into a map of what it talks about.",
   mcp:        "Open the curated data to an AI assistant &mdash; it can ask questions of these tables and chart the answers, without a copy of the data leaving the database.",
   mcptools:   "Each tool is one question this data can answer. Read them, change them, try them &mdash; nothing is exposed until you publish.",
   mlpredict:  "Predictions are worked out as you look at them &mdash; each sits beside the real row it came from, so you can compare."
@@ -1758,6 +1887,33 @@ async function ensureOpt() {
   }
 }
 function await0(p) { if (p && p.catch) p.catch(() => {}); }
+
+/* ---- stale-UI guard ----------------------------------------------------
+   index.html is served with a one-hour Expires and no version in its URL, so a
+   tab opened before a change keeps running the old JavaScript for up to an
+   hour. Nothing in the app reloads the page - not even Clear all - so a fix can
+   be live on the server and invisible in front of you, and the symptom is a bug
+   that "still happens" after it was fixed. This notices and says so. */
+let UIVERSION = null;
+async function checkUiVersion() {
+  try {
+    const j = await (await fetch(api("/ping"), { cache: "no-store" })).json();
+    if (!j.uiVersion) return;
+    if (UIVERSION === null) { UIVERSION = j.uiVersion; return; }
+    if (j.uiVersion === UIVERSION || $("uistale")) return;
+    const bar = document.createElement("div");
+    bar.id = "uistale";
+    bar.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);bottom:1rem;z-index:99;" +
+      "background:var(--ink);color:var(--paper);border-radius:12px;padding:.5rem .9rem;" +
+      "font-family:Newsreader,serif;font-size:.8rem;box-shadow:var(--shadow);display:flex;gap:.6rem;align-items:center";
+    bar.innerHTML = `<span>This page is running an older version of the app.</span>` +
+      `<button style="font:inherit;font-weight:700;background:var(--paper);color:var(--ink);` +
+      `border:0;border-radius:8px;padding:.25rem .7rem;cursor:pointer">Reload</button>`;
+    bar.querySelector("button").onclick = () => location.reload(true);
+    document.body.appendChild(bar);
+  } catch (e) { /* offline or mid-restart: say nothing */ }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) await0(checkUiVersion()); });
 
 /* wizardStep1 (name-the-pipeline) is gone: an ETL is no longer the thing you
    start from. Data Sources stands on its own, and ETL Interop names its
@@ -2183,28 +2339,22 @@ function syncBulkGraph() {
   nodes.set(loadNode, { nodeId: loadNode, name: base + "_bulk", kind: "bulk_load", status: st,
     detail: cfg.join("|"), order: 25 });
   edges.push({ from: fileNode, to: loadNode, label: wiz.bulk ? "LOAD BULK DATA" : "LOAD DATA" });
-  nodes.set(tgtNode, { nodeId: tgtNode, name: "ETLW_TARGET." + base, kind: "target",
+  // The file is ingested into a SOURCE table, not an ETL target - and no
+  // production is created, so the three host nodes this used to draw would be
+  // a picture of something that does not exist.
+  nodes.set(tgtNode, { nodeId: tgtNode, name: "ETLWIZARD.ext_" + base, kind: "source_table",
     status: done ? "succeeded" : "configured", order: 40 });
   edges.push({ from: loadNode, to: tgtNode, label: wiz.bulkStrategy === "append" ? "Append" : "Full reload" });
-  if (done) {
-    const hosts = [
-      { id: "wiz:h1", name: base + "_Extract", title: "Inbound Host", lbl: "Business Service" },
-      { id: "wiz:h2", name: base + "_Orchestrate", title: "Production Host", lbl: "Business Process" },
-      { id: "wiz:h3", name: base + "_Load", title: "Outbound Host", lbl: "Business Operation" }
-    ];
-    let from = tgtNode, fromLbl = "New production";
-    hosts.forEach((h, hi) => {
-      nodes.set(h.id, { nodeId: h.id, name: h.name, kind: "host", title: h.title, status: "created", detail: h.lbl, order: 50 + hi });
-      edges.push({ from: from, to: h.id, label: fromLbl }); from = h.id; fromLbl = "";
-    });
-  }
   renderGraph();
 }
 
 async function wizardStepBulk() {
   wizGraphActive = true; graphFrozen = false; wiz.deployed = false;
   wguide("<b>Bulk load a file.</b> Upload a <b>CSV</b> or <b>XLSX</b> (converted to CSV on the server). " +
-    "It loads straight into a target table with IRIS <b>LOAD DATA / LOAD BULK DATA</b> &mdash; fast, no transform step.");
+    "The rows are ingested <b>once</b> with IRIS <b>LOAD DATA / LOAD BULK DATA</b> into a source table " +
+    "<b>ETLWIZARD.ext_&lt;name&gt;</b>, beside the sources you mounted &mdash; ready to build an ETL from, " +
+    "or to embed on the Knowledge Base tab. No production and no schedule: an uploaded file does not " +
+    "change on its own. To import again, upload again.");
   const card = stepCard(
     `<div class="wrow" style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;width:100%">
        <label class="b_drop" style="flex:1;min-width:14rem;display:flex;align-items:center;gap:.6rem;padding:.7rem .9rem;border:1.5px dashed var(--teal);border-radius:12px;background:color-mix(in srgb,var(--teal) 6%,transparent);cursor:pointer;transition:background .2s ease">
@@ -2219,41 +2369,60 @@ async function wizardStepBulk() {
      </div>
      <span class="b_msg" style="font-size:.76rem;color:var(--ink-soft);width:100%"></span>
      <div class="b_form" style="display:none;width:100%">
-       <label>Target base name <input class="b_base" size="16" value="bulk_data"></label>
+       <label title="The file is ingested into ETLWIZARD.ext_&lt;this name&gt;">Source name <input class="b_base" size="16" value="bulk_data"></label>
+       <span class="w_details b_dest">will create <b>ETLWIZARD.ext_bulk_data</b></span>
        <label>Strategy <select class="b_strat"><option value="full">Full reload</option><option value="append">Append</option></select></label>
        <label title="LOAD BULK DATA is faster but non-atomic">Bulk <input class="b_bulk" type="checkbox" checked style="width:auto"></label>
        <label>Header row <input class="b_header" type="checkbox" checked style="width:auto"></label>
        <label>Delimiter <input class="b_delim" size="3" value=","></label>
        <div class="w_details b_cols"></div>
-       ${scheduleHtml(300)}
      </div>`,
     "Deploy & load", async c => {
       if (!wiz.bulkFile) { alert("Upload a file first."); throw new Error("no file"); }
       const base = c.querySelector(".b_base").value.trim();
-      wiz.cadence = scheduleSummary(c);
-      const j = await wpost("/bulk-deploy", Object.assign({
+      // No schedule, and no production. A bulk load is a ONE-OFF import of a
+      // file someone uploaded by hand: there is nothing for a poller to poll,
+      // and a business service firing every 300s would re-import the same file
+      // forever. Re-importing is a deliberate act - upload again.
+      wiz.cadence = "";
+      const j = await wpost("/bulk-deploy", {
         baseName: base, csvFile: wiz.bulkFile,
         columnDefs: c.querySelector(".b_cols").dataset.defs || wiz.bulkDefs,
         strategy: c.querySelector(".b_strat").value,
         bulk: c.querySelector(".b_bulk").checked ? 1 : 0,
         header: c.querySelector(".b_header").checked ? 1 : 0,
         separator: c.querySelector(".b_delim").value || ",",
-        pipelineName: wiz.pipelineName }, readWhen(c)));
+        pipelineName: wiz.pipelineName });
       const load = j.load || {};
       // finalize the flowchart (kept + snapshotted, like the transform path)
       wiz.targetBase = base; wiz.bulkStrategy = c.querySelector(".b_strat").value;
       wiz.bulk = c.querySelector(".b_bulk").checked; wiz.bulkDelim = c.querySelector(".b_delim").value;
       wiz.deployed = true; wizGraphActive = true; syncBulkGraph(); wizGraphActive = false;
       graphFrozen = true; snapshotGraph($("pipeid").value);
-      wrecap(`<b>Bulk loaded.</b> Moved <b>${load.rowsLoaded !== undefined ? load.rowsLoaded : "?"}</b> row(s) into ` +
-        `<b>${esc(load.target || "ETLW_TARGET." + base)}</b> via ${wiz.bulk ? "LOAD BULK DATA" : "LOAD DATA"}` +
-        (j.production && !String(j.production).startsWith("ERROR")
-          ? `.<br>&#127981; Added to the shared production as <b>${esc(base)}_Extract &rarr; ${esc(base)}_Orchestrate &rarr; ${esc(base)}_Load</b>` : "") +
-        `. Re-runs with <b>no AI</b> (Run button / schedule).`);
-      $("runbanner").innerHTML = "Pipeline deployed &middot; use the Run button for subsequent runs.";
-      // the bulk path lands in a target table too, so it gets the same last step
-      await wizardStepIndexes(base, "", "");
+      wrecap(`<b>Ingested.</b> Moved <b>${load.rowsLoaded !== undefined ? load.rowsLoaded : "?"}</b> row(s) into ` +
+        `<b>${esc(load.target || "ETLWIZARD.ext_" + base)}</b> via ${wiz.bulk ? "LOAD BULK DATA" : "LOAD DATA"}` +
+        (j.note ? `.<br><span class="w_details">${esc(j.note)}</span>` : "") +
+        `.<br>It is now a source like any other: build an ETL from it on <b>ETL Interop</b>, ` +
+        `or embed it on <b>Knowledge Base</b>. To import again, upload the file again.`);
+      $("runbanner").innerHTML = "File ingested as a source &middot; no production was created.";
+      // No index step. It optimises an ETL TARGET - a table that gets reloaded
+      // on a schedule and queried repeatedly - and reads ETLW_TARGET.<base>
+      // directly, so against an ingested source it failed with "target table
+      // ETLW_TARGET.<base> not found" after the data had already loaded fine.
+      // An ingested source is finished when it is loaded; index it from the ETL
+      // that consumes it, where the query pattern is actually known.
+      await0(refreshTables(""));
     });
+
+  // Show the real table name as it is typed: "Source name" alone does not say
+  // where the data lands, and the prefix is not the user's to remember.
+  const baseInp = card.querySelector(".b_base");
+  const dest = card.querySelector(".b_dest");
+  const showDest = () => {
+    const v = (baseInp.value || "").trim().replace(/^ext_/i, "");
+    dest.innerHTML = v ? `will create <b>ETLWIZARD.ext_${esc(v)}</b>` : "";
+  };
+  baseInp.oninput = showDest;
 
   const msg = card.querySelector(".b_msg");
   // filename display + drag & drop
@@ -2316,7 +2485,9 @@ async function wizardStepBulk() {
   };
   ["b_base", "b_strat", "b_bulk", "b_header", "b_delim"].forEach(cl =>
     card.querySelector("." + cl).addEventListener("input", bulkSync));
-  wireSchedule(card, bulkSync);
+  // No wireSchedule: this card has no schedule controls to wire, and calling it
+  // threw on the first missing element - which happens before the form is
+  // usable at all, so the whole step was dead.
 }
 
 function wizardStep3(items) {
@@ -3189,6 +3360,59 @@ $("delmodel").onclick = async () => {
   }
 };
 
+/* ---- Knowledge base picker (Presenter tools) ---------------------------
+   Clearing a knowledge base deletes what was EMBEDDED - vectors, entities,
+   relationships - and never the table they were read from. The confirm says so
+   in those words, because "clear" next to a table name reads as "drop table". */
+async function kgRefreshPresenter(keepValue) {
+  const sel = $("kglist");
+  if (!sel) return;
+  const keep = keepValue !== undefined ? keepValue : sel.value;
+  try {
+    const list = (await (await fetch(api("/kg/corpus"))).json()).corpora || [];
+    sel.innerHTML = `<option value="">${list.length ? "&mdash; select a knowledge base &mdash;" : "no knowledge bases yet"}</option>` +
+      list.map(c => `<option value="${escA(c.id)}">${esc(c.name)} &middot; ${c.chunksIngested} chunks` +
+        `${c.entities ? " &middot; " + c.entities + " entities" : ""}</option>`).join("");
+    sel.value = (keep && [...sel.options].some(o => o.value === keep)) ? keep : "";
+  } catch (e) {
+    sel.innerHTML = `<option value="">could not load knowledge bases</option>`;
+  }
+  $("delkg").disabled = !sel.value;
+}
+$("kglist").onchange = () => { $("delkg").disabled = !$("kglist").value; };
+
+$("delkg").onclick = async () => {
+  const id = $("kglist").value;
+  if (!id) return;
+  const label = $("kglist").selectedOptions[0].textContent;
+  if (!confirm(`Delete the knowledge base "${label}"?
+
+` +
+               `Its chunks, vectors, entities and relationships are removed. ` +
+               `The target table it was built from is NOT touched - only what was ` +
+               `embedded from it.`)) return;
+  const btn = $("delkg");
+  btn.disabled = true; setStatus("clearing knowledge base&hellip;");
+  try {
+    const j = await (await fetch(api(`/kg/corpus/${id}/drop`), { method: "POST" })).json();
+    if (j.error) throw new Error(j.error);
+    $("runbanner").innerHTML = `Deleted knowledge base <b>${esc(label)}</b>`;
+    setStatus("knowledge base cleared");
+    await kgRefreshPresenter("");
+    // the tab caches its own DOM and holds the deleted id in KG.corpusId
+    if (typeof KG === "object" && String(KG.corpusId) === String(id)) {
+      KG.corpusId = null; KG.corpus = null;
+    }
+    resetTab("kg");
+    if (activeTab === "kg") { activeTab = null; showTab("kg"); }
+  } catch (e) {
+    wfail("The knowledge base could not be deleted.", String(e && e.message || e));
+    setStatus("clear failed");
+  } finally {
+    btn.disabled = !$("kglist").value;
+  }
+};
+
 /* ---- MCP tool picker (Presenter tools) ---------------------------------
    The MCP tab publishes tools; this is the only place ONE can be withdrawn
    without republishing the rest by hand, which is why it sits with the other
@@ -3284,14 +3508,21 @@ $("clearall").onclick = async () => {
     $("runbanner").innerHTML = `Cleared <b>${j.pipelines}</b> pipeline(s), <b>${j.runs}</b> run(s) ` +
       `and <b>${j.tablesDropped}</b> table(s)` +
       ((j.failed || []).length ? ` &middot; ${j.failed.length} could not be dropped` : "") +
-      (j.mcpCleared ? " &middot; MCP tools unpublished" : "");
+      (j.mcpCleared ? " &middot; MCP tools unpublished" : "") +
+      (j.kgCleared ? ` &middot; ${j.kgCleared} knowledge base(s) deleted` : "");
     await refreshPipelines("");
     await refreshTables("");
     await refreshMcpTools("");
+    await kgRefreshPresenter("");
     // both tabs' sessions referred to pipelines that no longer exist
     wiz.sourcesRunId = null; wiz.etlRunId = null;
-    resetTab("sources"); resetTab("etl"); resetTab("mcp");
+    resetTab("sources"); resetTab("etl"); resetTab("mcp"); resetTab("kg");
     activeTab = null; showTab("sources");
+    // A full wipe is the one moment where reloading costs nothing and settles
+    // everything: in-memory wizard state, cached panes, and - the reason this
+    // is here - the JavaScript itself, which a long-open tab may have been
+    // holding from before the last change.
+    setTimeout(() => location.reload(), 1200);
   } finally {
     btn.disabled = false; setStatus("disconnected");
   }
@@ -3586,7 +3817,7 @@ let activeTab = null;
    left — switching tabs to check something must never discard work in
    progress. paneCache[tab] holds the detached nodes; empty means "never
    rendered", which is the only time a tab builds itself from scratch. */
-const paneCache = { sources: null, etl: null, ml: null, mcp: null };
+const paneCache = { sources: null, etl: null, ml: null, mcp: null, kg: null };
 
 /* The right-hand chart is per-tab too, and the two show different things:
      ETL Interop  - the LIVE graph of the ETL being built, driven by the
@@ -3596,7 +3827,7 @@ const paneCache = { sources: null, etl: null, ml: null, mcp: null };
    loadPipelineChart() clears nodes/edges and freezes the graph, so without
    snapshotting the authoring state, viewing a saved pipeline would wipe the
    ETL you are in the middle of building. */
-const chartCache = { sources: null, etl: null, ml: null, mcp: null };
+const chartCache = { sources: null, etl: null, ml: null, mcp: null, kg: null };
 
 function saveChart(tab) {
   const snap = {
@@ -3621,6 +3852,7 @@ function restoreChart(tab) {
     tab === "etl" ? "Pipeline flowchart <small>&middot; the logic you are building</small>"
     : tab === "ml" ? "Model flowchart <small>&middot; derived from INFORMATION_SCHEMA</small>"
     : tab === "mcp" ? "Published tools <small>&middot; what an MCP client can call</small>"
+    : tab === "kg" ? "Knowledge graph <small>&middot; entities mined from the text</small>"
     : "Pipeline flowchart <small>&middot; a saved pipeline</small>";
   if (!snap) {
     $("flow").innerHTML = ""; $("runbanner").innerHTML = ""; $("runhistory").innerHTML = "";
@@ -3634,6 +3866,9 @@ function restoreChart(tab) {
     } else if (tab === "mcp") {
       $("runbanner").innerHTML =
         "Publish a table to see the tools it exposes here.";
+    } else if (tab === "kg") {
+      $("runbanner").innerHTML =
+        "Embed a text column to see its knowledge graph here.";
     } else {
       renderGraph();
     }
@@ -3656,6 +3891,16 @@ function restoreChart(tab) {
 
 function showTab(name) {
   if (activeTab === name) return;
+  // The right pane carries a title, a results panel, a run history and an event
+  // log - all of which describe a pipeline RUN. The Knowledge Base pane shows a
+  // graph instead, so on that tab they are permanently empty boxes that still
+  // take their margins. One class turns the pane over to the graph.
+  $("right").classList.toggle("kgmode", name === "kg");
+  if (name !== "kg") {
+    document.body.classList.remove("kgchat");
+    const lg = $("kglegend");
+    if (lg) lg.innerHTML = "";
+  }
   const convo = $("convo");
   if (activeTab) { paneCache[activeTab] = Array.from(convo.childNodes); saveChart(activeTab); }
   activeTab = name;
@@ -3676,6 +3921,8 @@ function showTab(name) {
     renderMlTab();
   } else if (name === "mcp") {
     renderMcpTab();
+  } else if (name === "kg") {
+    renderKgTab();
   } else {
     renderEtlTab();
   }
@@ -4796,6 +5043,594 @@ function mcpDrawGraph(specs, tools) {
     : "Nothing published yet.";
 }
 
+/* ---- Knowledge Base -----------------------------------------------------
+   Two sections behind one tab:
+     Embedding          - turn a text column into vectors (+ optional graph)
+     Chat / Knowledge graph - ask the embedded data; the graph draws on the right
+
+   Ingestion is driven one BATCH per request from here rather than one long
+   server call: a batch is seconds, a full run can be hours, and the webgateway
+   gives up at ~60s. The loop below is therefore the progress bar, the stop
+   button and the timeout protection all at once. The chat is asynchronous for
+   the same reason - a question is a row the server works on and this polls. */
+const KG = { section: "embed", corpusId: null, corpus: null, corpora: [],
+             running: false, stop: false, info: null };
+
+async function kgCall(path, payload) {
+  const r = await fetch(api("/kg/" + path), payload === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const text = await r.text();
+  if (!text.trim()) {
+    const why = `The server returned an empty response (HTTP ${r.status}).`;
+    wfail(why, `/kg/${path} -> HTTP ${r.status}, empty body`); throw new Error(why);
+  }
+  let j;
+  try { j = JSON.parse(text); }
+  catch (e) {
+    const why = `The server answered with something that is not JSON (HTTP ${r.status}).`;
+    wfail(why, text.slice(0, 600)); throw new Error(why);
+  }
+  if (j.error) {
+    wfail(j.error, j.detail ? `${j.detail}\n\n/kg/${path} -> HTTP ${r.status}` : `/kg/${path} -> HTTP ${r.status}`);
+    throw new Error(j.error);
+  }
+  return j;
+}
+
+const KGBTN = "font-family:Newsreader,serif;font-weight:700;font-size:.74rem;" +
+  "background:var(--card);color:var(--ink);border:1.5px solid var(--rule);" +
+  "border-radius:10px;padding:.32rem .7rem;cursor:pointer";
+
+/* The tab is a shell: a section switcher plus whichever section is active.
+   Switching rebuilds #convo rather than caching both, because the two sections
+   share the right-hand pane and a stale graph beside a live chat is worse than
+   a redraw. */
+async function renderKgTab() {
+  await ensureOpt();
+  try { KG.info = await kgCall("candidates"); } catch (e) { return; }
+  try { KG.corpora = (await kgCall("corpus")).corpora || []; } catch (e) { KG.corpora = []; }
+  if (!KG.corpusId && KG.corpora.length) {
+    const ready = KG.corpora.find(c => c.chunksIngested > 0);
+    if (ready) { KG.corpusId = ready.id; KG.corpus = ready; }
+  }
+  kgRenderSection();
+}
+
+function kgNav() {
+  const tab = (id, label) =>
+    `<button class="kgnavbtn${KG.section === id ? " on" : ""}" data-sec="${id}">${label}</button>`;
+  const nav = wmsg("kgnav",
+    `<div class="kgnavrow">${tab("embed", "Embedding")}${tab("chat", "Chat &amp; Knowledge graph")}</div>`);
+  nav.querySelectorAll(".kgnavbtn").forEach(b => {
+    b.onclick = e => {
+      e.preventDefault();
+      if (KG.running) { wfail("Embedding is still running - stop it first."); return; }
+      KG.section = b.dataset.sec;
+      kgRenderSection();
+    };
+  });
+  return nav;
+}
+
+function kgRenderSection() {
+  // scoped to this section, not the tab: the Embedding section keeps the
+  // standard grounds
+  document.body.classList.toggle("kgchat", KG.section === "chat");
+  $("convo").replaceChildren();
+  kgNav();
+  if (KG.section === "chat") { kgSectionChat(); } else { kgSectionEmbed(); }
+}
+
+/* ---- section 1: Embedding ---------------------------------------------- */
+function kgSectionEmbed() {
+  wguide("<b>Embedding.</b> Point this at a table column holding free text &mdash; " +
+    "product descriptions, feedback, log lines. Each row is embedded inside IRIS " +
+    "and, optionally, mined for entities and relationships. Nothing is copied " +
+    "anywhere: the vectors and the graph live in this database beside the data " +
+    "they came from.", "", "kg");
+
+  const cands = (KG.info && KG.info.tables) || [];
+  if (!cands.length) {
+    wmsg("formcard", `<span class="w_details">No target tables yet. Build an ETL on the ` +
+      `<b>ETL Interop</b> tab first &mdash; this tab reads what that produces.</span>`);
+    return;
+  }
+
+  const tableOpts = cands.map(t =>
+    `<option value="${escA(t.full)}">${esc(t.full)} &middot; ${esc(t.rows)} rows</option>`).join("");
+  const card = stepCard(
+    `<div style="width:100%">
+       <b>Text to embed</b>
+       <div class="w_details">Pick the table and the column holding the prose. The
+       label column prefixes each chunk before embedding, which separates senses
+       in vector space &mdash; a product name or a ticket subject works well.</div>
+       <div class="wrow" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+         <label>Table <select class="kg_table">${tableOpts}</select></label>
+         <label>Text column <select class="kg_text"></select></label>
+         <label>Label column <select class="kg_label"></select></label>
+       </div>
+       <div class="kg_profile w_details" style="margin-top:.45rem"></div>
+       <div class="wrow" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.35rem">
+         <label>Rows <input class="kg_rows" type="number" min="1" max="100000" value="500" size="6"></label>
+         <label style="display:flex;gap:.3rem;align-items:baseline">
+           <input type="checkbox" class="kg_extract"> build the entity graph too</label>
+       </div>
+       <div class="kg_extractwarn w_details" style="margin-top:.3rem"></div>
+     </div>`,
+    "Start embedding", async c => {
+      const spec = {
+        table: c.querySelector(".kg_table").value,
+        textColumn: c.querySelector(".kg_text").value,
+        labelColumn: c.querySelector(".kg_label").value,
+        rowLimit: +c.querySelector(".kg_rows").value || 500,
+        extractGraph: c.querySelector(".kg_extract").checked ? 1 : 0
+      };
+      const started = await kgCall("start", spec);
+      KG.corpusId = started.id; KG.corpus = started;
+      wrecap(`Embedding <b>${esc(spec.textColumn)}</b> from <b>${esc(spec.table)}</b>` +
+        `${spec.extractGraph ? ", with graph extraction" : ""}.`);
+      kgStepRun();
+    });
+
+  const tableSel = card.querySelector(".kg_table");
+  const textSel = card.querySelector(".kg_text");
+  const labelSel = card.querySelector(".kg_label");
+  const profileBox = card.querySelector(".kg_profile");
+  const warnBox = card.querySelector(".kg_extractwarn");
+
+  const fillColumns = () => {
+    const t = cands.find(x => x.full === tableSel.value);
+    if (!t) return;
+    textSel.innerHTML = (t.textColumns || []).map(c =>
+      `<option value="${escA(c.name)}">${esc(c.name)}</option>`).join("");
+    labelSel.innerHTML = `<option value="">&mdash; none &mdash;</option>` +
+      (t.columns || []).map(c => `<option value="${escA(c)}">${esc(c)}</option>`).join("");
+    await0(runProfile());
+  };
+  // The profile MEASURES a real embedding round-trip, so the time estimate the
+  // user reads is this machine's number and not a constant from a document.
+  const runProfile = async () => {
+    profileBox.innerHTML = `<span class="kgpulse">measuring on this machine...</span>`;
+    try {
+      const p = await kgCall("profile", {
+        table: tableSel.value, column: textSel.value });
+      const want = +card.querySelector(".kg_rows").value || 500;
+      const ms = +p.msPerRow || 0;
+      const est = ms ? kgDuration((ms * Math.min(want, p.embeddableRows)) / 1000) : "unknown";
+      const all = ms ? kgDuration((ms * p.embeddableRows) / 1000) : "unknown";
+      profileBox.innerHTML =
+        `<b>${p.embeddableRows}</b> of ${p.rows} rows have text worth embedding &middot; ` +
+        `average ${p.avgChars} characters &middot; measured <b>${ms} ms</b> per row here.<br>` +
+        `${Math.min(want, p.embeddableRows)} rows &asymp; <b>${est}</b>. ` +
+        `The whole column would be <b>${all}</b>.`;
+    } catch (e) { profileBox.innerHTML = ""; }
+  };
+  tableSel.onchange = fillColumns;
+  textSel.onchange = () => await0(runProfile());
+  card.querySelector(".kg_rows").onchange = () => await0(runProfile());
+  // Extraction is the expensive half by a wide margin and the user should see
+  // that before ticking it, not after waiting.
+  card.querySelector(".kg_extract").onchange = e => {
+    warnBox.innerHTML = e.target.checked
+      ? `Graph extraction calls <b>${esc((KG.info && KG.info.extractModel) || "the local model")}</b> once per chunk. ` +
+        `Measured here at about <b>40 s per chunk</b> &mdash; roughly 1000&times; the cost of ` +
+        `embedding, so keep the row count small while you judge the quality.`
+      : "";
+  };
+  fillColumns();
+}
+
+function kgDuration(seconds) {
+  if (!isFinite(seconds)) return "unknown";
+  if (seconds < 90) return `${Math.round(seconds)} s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(1)} hours`;
+}
+
+/* The batch loop. Every iteration is one server call that commits, so Stop is
+   instant and a failure costs one batch rather than the run. The animation is
+   not decoration: embedding a batch is silent server-side work with no
+   intermediate output, so without it a slow batch is indistinguishable from a
+   hang. */
+function kgStepRun() {
+  const card = wmsg("formcard",
+    `<div style="width:100%">
+       <div class="kgbar"><div class="kgbarfill"></div></div>
+       <div class="kg_prog" style="margin-top:.5rem"><b class="kgpulse">Starting...</b></div>
+       <div class="wrow" style="display:flex;gap:.5rem;margin-top:.45rem">
+         <button class="kg_stop" style="${KGBTN}">Stop</button>
+       </div>
+     </div>`);
+  const prog = card.querySelector(".kg_prog");
+  const bar = card.querySelector(".kgbar");
+  const fill = card.querySelector(".kgbarfill");
+  card.querySelector(".kg_stop").onclick = e => { e.preventDefault(); KG.stop = true; };
+
+  KG.stop = false; KG.running = true;
+  const started = Date.now();
+  (async () => {
+    try {
+      for (;;) {
+        if (KG.stop) {
+          await kgCall(`corpus/${KG.corpusId}/cancel`, {});
+          prog.innerHTML = "<b>Stopped.</b> What was embedded is kept.";
+          break;
+        }
+        const s = await kgCall(`corpus/${KG.corpusId}/run`, {});
+        KG.corpus = s;
+        const secs = (Date.now() - started) / 1000;
+        const rate = s.rowsIngested ? (s.rowsIngested / secs).toFixed(1) : "0";
+        const pct = s.rowsRequested ? Math.min(100, (s.rowsIngested / s.rowsRequested) * 100) : 0;
+        fill.style.width = pct + "%";
+        prog.innerHTML =
+          `<b>${s.rowsIngested}</b> of ${s.rowsRequested} rows &middot; ` +
+          `<b>${s.chunksIngested}</b> chunks` +
+          `${s.entities ? ` &middot; <b>${s.entities}</b> entities, ${s.relationships} relationships` : ""}<br>` +
+          `<span class="w_details"><span class="kgpulse">${esc(s.statusDetail || "")}</span> &middot; ` +
+          `${rate} rows/sec &middot; ${kgDuration(secs)} elapsed</span>`;
+        if (s.entities) await0(kgDrawGraph());
+        if (s.done) {
+          prog.innerHTML += `<br><b>${esc(s.status)}.</b>`;
+          break;
+        }
+      }
+    } catch (e) {
+      prog.innerHTML += `<br><span class="w_details">stopped: ${esc(String(e.message || e))}</span>`;
+    } finally {
+      KG.running = false;
+      bar.classList.add("kgdone");
+      card.querySelector(".kg_stop").disabled = true;
+      try { KG.corpora = (await kgCall("corpus")).corpora || []; } catch (e) {}
+      await0(kgDrawGraph());
+      const go = wmsg("formcard",
+        `<div style="width:100%"><b>Embedded.</b>
+           <div class="w_details">Ask it something, and see the graph it built.</div>
+           <div class="wrow" style="margin-top:.45rem">
+             <button class="kg_tochat" style="${KGBTN}">Open Chat &amp; Knowledge graph</button>
+           </div></div>`);
+      go.querySelector(".kg_tochat").onclick = e => {
+        e.preventDefault(); KG.section = "chat"; kgRenderSection();
+      };
+      await0(kgRefreshPresenter());
+    }
+  })();
+}
+
+/* ---- section 2: Chat / Knowledge graph ---------------------------------- */
+function kgSectionChat() {
+  const ready = KG.corpora.filter(c => c.chunksIngested > 0);
+  if (!ready.length) {
+    wmsg("formcard", `<span class="w_details">Nothing is embedded yet. Use the ` +
+      `<b>Embedding</b> section first.</span>`);
+    return;
+  }
+  if (!KG.corpusId || !ready.some(c => String(c.id) === String(KG.corpusId))) {
+    KG.corpusId = ready[0].id; KG.corpus = ready[0];
+  }
+
+  const opts = ready.map(c =>
+    `<option value="${escA(c.id)}"${String(c.id) === String(KG.corpusId) ? " selected" : ""}>` +
+    `${esc(c.name)} &middot; ${c.chunksIngested} chunks` +
+    `${c.entities ? " &middot; " + c.entities + " entities" : ""}</option>`).join("");
+  const picker = wmsg("formcard",
+    `<div style="width:100%;display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap">
+       <label>Answer from <select class="kg_corpus">${opts}</select></label>
+     </div>`);
+  picker.querySelector(".kg_corpus").onchange = async e => {
+    KG.corpusId = e.target.value;
+    KG.corpus = ready.find(c => String(c.id) === String(e.target.value));
+    await0(kgDrawGraph());
+  };
+
+  wguide("<b>Ask the data.</b> This searches the vectors, not the words &mdash; " +
+    "the match is on meaning, so a question phrased nothing like the text still " +
+    "finds it. Answers are written from the records it retrieved, and the graph " +
+    "on the right is what was mined from the same data.");
+
+  const bar = wmsg("formcard",
+    `<div style="width:100%;display:flex;gap:.5rem">
+       <input class="kg_q" placeholder="ask a question..." style="flex:1">
+       <button class="kg_go" style="${KGBTN}">Ask</button>
+     </div>`);
+  const input = bar.querySelector(".kg_q");
+  const go = bar.querySelector(".kg_go");
+
+  const ask = async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    go.disabled = true; input.disabled = true;
+    kgBubble("user", q);
+    // A live status bubble, replaced in place by the answer: the model takes
+    // tens of seconds and silence reads as a hang.
+    const status = kgBubble("status", "searching the embedded records...");
+    try {
+      const started = await kgCall("ask", { corpusId: KG.corpusId, question: q });
+      let last = "";
+      for (;;) {
+        const s = await (await fetch(api(`/kg/ask/${started.id}`))).json();
+        if (s.error) throw new Error(s.error);
+        if (s.statusDetail && s.statusDetail !== last) {
+          last = s.statusDetail;
+          status.innerHTML = `<span class="kgpulse">${esc(s.statusDetail)}</span>`;
+        }
+        if (s.done) {
+          status.remove();
+          if (s.status === "error") {
+            wfail("The answer could not be produced.", s.statusDetail);
+          } else {
+            kgBubble("agent", s.answer);
+            kgSources(s.hits);
+          }
+          break;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    } catch (e) {
+      status.remove();
+    } finally {
+      go.disabled = false; input.disabled = false; input.focus();
+    }
+  };
+  go.onclick = e => { e.preventDefault(); await0(ask()); };
+  input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); await0(ask()); } };
+  input.focus();
+  await0(kgDrawGraph());
+}
+
+function kgBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "chat " + (role === "user" ? "user" : "agent");
+  if (role === "status") {
+    div.className = "chat agent kgstatus";
+    div.innerHTML = `<span class="kgpulse">${esc(text)}</span>`;
+  } else {
+    div.innerHTML = (role === "agent" ? `<span class="who">knowledge base</span>` : "") + esc(text);
+  }
+  $("convo").appendChild(div);
+  scrollConvo();
+  return div;
+}
+
+/* What the answer was built from. An answer with no visible evidence is a
+   claim; with its records beside it, it can be checked. */
+function kgSources(hits) {
+  const chunks = (hits && hits.chunks) || [];
+  if (!chunks.length) return;
+  const card = wmsg("formcard",
+    `<details style="width:100%"><summary class="w_details">the ${chunks.length} records this was answered from</summary>
+       <div class="rptable" style="margin-top:.4rem"><table><thead><tr><th>score</th><th>label</th><th>text</th></tr></thead><tbody>` +
+       chunks.map(h => `<tr><td class="num">${esc(h.score)}</td><td>${esc(h.label)}</td>` +
+         `<td>${esc(h.text)}</td></tr>`).join("") +
+     `</tbody></table></div></details>`);
+  return card;
+}
+
+/* ---- the constellation, in the right pane -------------------------------
+   Not a flowchart: renderGraph() is a ranked vertical chain and a knowledge
+   graph rendered through it comes out as a ladder. This is its own D3 force
+   layout in the same slot, vendored rather than loaded from a CDN so it still
+   draws on a conference network with no internet. */
+const KG_TYPE_COLOR = {
+  Person: "#2f2a95", Organization: "#00a99d", Product: "#d98a00",
+  Location: "#c8553d", Event: "#2e7d32", Issue: "#ad1457", Concept: "#7b3fb3"
+};
+
+async function kgDrawGraph() {
+  if (!KG.corpusId) return;
+  let g;
+  try { g = await (await fetch(api(`/kg/corpus/${KG.corpusId}/graph?limit=200`))).json(); }
+  catch (e) { return; }
+  if (!g || g.error) return;
+  const flow = $("flow");
+  if (!g.nodes || !g.nodes.length) {
+    flow.innerHTML = "";
+    $("kglegend").innerHTML = "";
+    $("runbanner").innerHTML = KG.corpus && KG.corpus.chunksIngested
+      ? `<b>${KG.corpus.chunksIngested}</b> chunks embedded &middot; no entity graph yet ` +
+        `<span class="w_details">(tick "build the entity graph too" when embedding to extract one)</span>`
+      : "Nothing embedded yet.";
+    return;
+  }
+  $("runbanner").innerHTML =
+    `<b>${g.shown}</b> entities &middot; ${g.links.length} relationships` +
+    (g.linksHidden ? ` <span class="w_details">(${g.linksHidden} further link(s) between ` +
+      `already-connected pairs are not drawn)</span>` : "") +
+    (g.trimmed ? ` <span class="w_details">(${g.trimmed} more entities not shown)</span>` : "");
+
+  if (typeof d3 === "undefined") {
+    flow.innerHTML = `<span class="w_details">the graph renderer did not load</span>`;
+    return;
+  }
+  // Build the box FIRST, then measure it. Measuring `flow` before the wrapper
+  // exists gave a height of whatever the previous content happened to be, so
+  // the viewBox and the rendered box disagreed and the graph came out as specks
+  // in a field of white.
+  flow.innerHTML = `<div class="kgwrap"><svg id="kgsky"></svg><div id="kglegend"></div></div>`;
+  const wrap = flow.querySelector(".kgwrap");
+  const w = wrap.clientWidth || 600, h = wrap.clientHeight || 520;
+  const svg = d3.select("#kgsky").attr("viewBox", `0 0 ${w} ${h}`)
+    .attr("preserveAspectRatio", "xMidYMid meet");
+  const root = svg.append("g");
+  const zoom = d3.zoom().scaleExtent([0.15, 4]).on("zoom", ev => root.attr("transform", ev.transform));
+  svg.call(zoom);
+
+  const nodes = g.nodes.map(n => Object.assign({}, n));
+  const links = g.links.map(l => Object.assign({}, l));
+
+  // A soft drop shadow lifts the nodes off the ground rather than letting them
+  // sit flat among the edges - wikigraph's filter, values and all.
+  const defs = svg.append("defs");
+  const soft = defs.append("filter").attr("id", "kgsoft")
+    .attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+  soft.append("feDropShadow").attr("dx", 0).attr("dy", 1).attr("stdDeviation", 1.4)
+    .attr("flood-color", "#112b4d").attr("flood-opacity", .4);
+
+  // Size by how often the entity is mentioned, on a square root - so something
+  // mentioned 25 times is five times the radius of something mentioned once,
+  // not twenty-five times. Same curve wikigraph uses on degree.
+  const radius = d => 5 + Math.sqrt(d.mentions || 0) * 3.2;
+
+  const link = root.append("g").selectAll("line").data(links).join("line")
+    .attr("class", "kglink");
+  const label = root.append("g").selectAll("text").data(links).join("text")
+    .attr("class", "kgpred").text(d => d.predicate || "");
+
+  const node = root.append("g").selectAll("g").data(nodes).join("g").attr("class", "kgnode");
+  node.append("circle")
+    .attr("r", radius)
+    .attr("fill", d => KG_TYPE_COLOR[d.type] || "#888")
+    .attr("filter", "url(#kgsoft)");
+  // above the node and centred, so a label belongs to its own circle instead of
+  // trailing into whatever happens to sit to the right of it
+  node.append("text").attr("class", "kglabel")
+    .attr("y", d => -radius(d) - 5).text(d => d.name);
+  node.append("title").text(d => `${d.name} (${d.type}) - ${d.mentions} mention(s)\n${d.description || ""}`);
+
+  // Fit the drawing to the box once the layout settles. A force layout spreads
+  // to wherever its forces balance, which is not the shape of this pane - so
+  // without this there is always either overflow or wasted space, and with 51
+  // nodes it was mostly wasted space.
+  const fitToBox = () => {
+    const b = root.node().getBBox();
+    if (!b.width || !b.height) return;
+    const pad = 28;
+    // Never shrink below what stays readable: a 10px label at 0.4 is 4px. If the
+    // graph genuinely needs more room than that, it overflows and the user pans
+    // - which is honest, where an unreadable fit is not.
+    const k = Math.max(Math.min((w - pad * 2) / b.width, (h - pad * 2) / b.height, 1.6), .45);
+    const t = d3.zoomIdentity
+      .translate(w / 2, h / 2).scale(k)
+      .translate(-(b.x + b.width / 2), -(b.y + b.height / 2));
+    // applied directly, not through a transition: a transition is another rAF
+    // dependency, and this runs once the layout is already final
+    svg.call(zoom.transform, t);
+  };
+
+  const draw = () => {
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    // ride the line, flipped where it would otherwise read upside down
+    label.attr("transform", d => {
+      const mx = (d.source.x + d.target.x) / 2, my = (d.source.y + d.target.y) / 2;
+      let a = Math.atan2(d.target.y - d.source.y, d.target.x - d.source.x) * 180 / Math.PI;
+      if (a > 90 || a < -90) { a += 180; }
+      return `translate(${mx},${my}) rotate(${a}) translate(0,-3)`;
+    });
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  };
+
+  // Settle the layout SYNCHRONOUSLY instead of animating it.
+  //
+  // d3's force simulation is driven by requestAnimationFrame. Any context that
+  // throttles rAF - a background tab, a hidden pane - runs zero ticks, and the
+  // graph renders with every node still at the origin: 51 labels stacked in a
+  // 153x26 box, which is exactly the "specks in a field of white" this looked
+  // like. Ticking by hand makes the layout deterministic and instant, and the
+  // graph arrives settled rather than wobbling into place.
+  // forceCenter only moves the centre of mass; it does not stop the cloud
+  // expanding. Left to itself this laid 51 nodes out over 2455x2294, which the
+  // fit then had to shrink to 0.26 - legible labels became specks. forceX/forceY
+  // pull every node gently toward the middle, so the layout settles at roughly
+  // the size of the box it has to live in.
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d.id)
+      .distance(d => 70 + (d.source.mentions || 0) * 3).strength(.5))
+    .force("charge", d3.forceManyBody().strength(-220).distanceMax(400))
+    .force("center", d3.forceCenter(w / 2, h / 2))
+    .force("x", d3.forceX(w / 2).strength(.05))
+    .force("y", d3.forceY(h / 2).strength(.08))
+    // keep each node's own label clear of its neighbours
+    .force("collide", d3.forceCollide().radius(d => radius(d) + 22))
+    .stop();
+  for (let i = 0; i < 320; i++) {
+    sim.tick();
+  }
+  draw();
+  fitToBox();
+  // dragging still animates, where rAF is available
+  sim.on("tick", draw);
+  node.call(d3.drag()
+    .on("start", (ev, d) => { if (!ev.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; })
+    // draw() on every drag event, not only on a tick: where rAF is throttled the
+    // simulation never ticks and the node would stay under the cursor unmoved.
+    .on("drag", (ev, d) => { d.fx = ev.x; d.fy = ev.y; d.x = ev.x; d.y = ev.y; draw(); })
+    .on("end", (ev, d) => { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  kgBuildLegend(nodes, node, link, label);
+
+  // The pane changes width with the focus toggle and the window; a graph fitted
+  // to the old box is the same wasted-space problem again.
+  clearTimeout(KG.resizeTimer);
+  if (!KG.resizeWired) {
+    KG.resizeWired = true;
+    window.addEventListener("resize", () => {
+      clearTimeout(KG.resizeTimer);
+      KG.resizeTimer = setTimeout(() => { if (activeTab === "kg") await0(kgDrawGraph()); }, 300);
+    });
+  }
+}
+
+/* The legend, ported from wikigraph: a swatch per entity type, click to
+   highlight, pick several. It doubles as the only place the type colours are
+   explained - without it the constellation is a field of coloured dots whose
+   colours mean nothing to the person looking at it. */
+function kgBuildLegend(nodes, nodeSel, linkSel, labelSel) {
+  const box = $("kglegend");
+  const counts = new Map();
+  nodes.forEach(n => counts.set(n.type || "Unknown", (counts.get(n.type || "Unknown") || 0) + 1));
+  const types = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
+  if (!types.length) { box.innerHTML = ""; return; }
+
+  box.innerHTML =
+    `<div class="kglh">entity types</div>` +
+    `<div class="kglhint">click to highlight &middot; pick several</div>` +
+    `<div class="kglbody">` +
+    types.map(t => `<div class="kgleg" data-type="${escA(t)}">` +
+      `<span class="sw" style="background:${KG_TYPE_COLOR[t] || "#888"}"></span>` +
+      `${esc(t)} <span class="n">${counts.get(t)}</span></div>`).join("") +
+    `</div>` +
+    `<div class="kglacts">` +
+      `<button class="kglbtn kgllinks">hide labels</button>` +
+      `<button class="kglbtn kglall">select all</button>` +
+      `<button class="kglbtn kglclear">clear selection</button>` +
+    `</div>`;
+
+  const active = new Set();
+  // The predicate TEXT is what crowds the view - dozens of small words lying
+  // across each other between nodes. The connecting lines are what makes it a
+  // graph, so they stay: turning the labels off leaves the structure readable
+  // and drops the noise. Hidden with `display`, not opacity, so nothing
+  // invisible is still catching the pointer.
+  let labelsShown = true;
+  const apply = () => {
+    box.querySelectorAll(".kgleg").forEach(r => r.classList.toggle("sel", active.has(r.dataset.type)));
+    box.querySelector(".kglclear").classList.toggle("show", active.size > 0);
+    const on = d => active.size === 0 || active.has(d.type || "Unknown");
+    nodeSel.style("opacity", d => on(d) ? 1 : .12);
+    // an edge stays lit only while BOTH ends are, so a highlighted type shows
+    // its own connections rather than half-edges into dimmed nodes
+    const edgeOn = d => active.size === 0 || (on(d.source) && on(d.target));
+    linkSel.style("opacity", d => edgeOn(d) ? .6 : .05);
+    labelSel.style("display", labelsShown ? null : "none")
+            .style("opacity", d => edgeOn(d) ? 1 : .05);
+    box.querySelector(".kgllinks").textContent =
+      labelsShown ? "hide labels" : "show labels";
+  };
+  box.querySelectorAll(".kgleg").forEach(r => {
+    r.onclick = () => {
+      const t = r.dataset.type;
+      if (active.has(t)) { active.delete(t); } else { active.add(t); }
+      apply();
+    };
+  });
+  box.querySelector(".kgllinks").onclick = e => { e.preventDefault(); labelsShown = !labelsShown; apply(); };
+  box.querySelector(".kglall").onclick = e => { e.preventDefault(); types.forEach(t => active.add(t)); apply(); };
+  box.querySelector(".kglclear").onclick = e => { e.preventDefault(); active.clear(); apply(); };
+}
+
 async function renderEtlTab() {
   await ensureOpt();
   // offerTransformChoice reads /wizard/:runId/mounted; before a session exists
@@ -4901,6 +5736,8 @@ refreshPipelines();
 refreshTables();
 refreshMlModels();
 refreshMcpTools();
+kgRefreshPresenter();
+await0(checkUiVersion());
 
 /* keep the conversation pinned to the newest message unless the user scrolled up */
 (function () {

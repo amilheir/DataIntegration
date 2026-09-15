@@ -32,4 +32,8 @@ do ##class(ETLWizard.Setup).CreateRoles()
 // MCP Tools tab publishes some, which is the same state as a fresh install.
 do ##class(ETLWizard.MCP.Publisher).EnsureService()
 
+// Knowledge Graph: the embedding config and the ETLW_KG schema, so a clean
+// rebuild has them. The tab also installs on demand, so this is belt and braces.
+do ##class(ETLWizard.KG.Setup).Install(0)
+
 halt

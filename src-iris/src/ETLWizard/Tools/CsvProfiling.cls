@@ -114,13 +114,15 @@ Method InferCsvTypes(fileName As %String) As %String
         Set delim = ","
         Set bestCount = 0
         For d = ",", ";", "|", $Char(9) {
-            Set c = $Length(header, d) - 1
+            // count the separators that are actually SEPARATORS, not the ones
+            // sitting inside a quoted value
+            Set c = ..SplitAll(header, d, .probe) - 1
             If c > bestCount {
                 Set delim = d
                 Set bestCount = c
             }
         }
-        Set colCount = $Length(header, delim)
+        Set colCount = ..SplitAll(header, delim, .headFld)
         // type codes per column: 1=INTEGER 2=NUMERIC 3=DATE 4=VARCHAR
         For c = 1:1:colCount {
             Set type(c) = 0
@@ -161,10 +163,7 @@ Method InferCsvTypes(fileName As %String) As %String
         Set defs = ""
         Set report = []
         For c = 1:1:colCount {
-            Set colName = $Translate($ZStrip($Piece(header, delim, c), "<>W"), " -", "__")
-            If '##class(ETLWizard.Tools.Util).ValidIdent(colName) {
-                Set colName = "col" _ c
-            }
+            Set colName = ..SafeColumnName($Get(headFld(c)), c)
             Set sqlType = $Case(type(c),
                 1: "INTEGER",
                 2: "NUMERIC(18,4)",
@@ -209,7 +208,38 @@ Method OpenCsv(fileName As %String, Output stream As %Stream.FileCharacter) As %
 ///
 /// Lines with no quote at all (98.9% here) take the cheap $Piece path, so the
 /// character loop is only paid where it is actually needed.
-ClassMethod SplitCsvLine(line As %String, delim As %String, Output fld, colCount As %Integer) [ Internal, Private ]
+/// Quote-aware split that reports how many fields there actually are, rather
+/// than being told. RFC4180 quoting means a comma inside "New York, NY" is data,
+/// not a separator - counting with $Length(line, ",") gets that wrong, and got
+/// it wrong for the header while the data rows were parsed correctly.
+ClassMethod SplitAll(line As %String, delim As %String, Output fld) As %Integer [ Internal ]
+{
+    Kill fld
+    Set col = 1, cur = "", inQuote = 0
+    Set j = 1, len = $Length(line)
+    While j <= len {
+        Set ch = $Extract(line, j)
+        If ch = """" {
+            If inQuote && ($Extract(line, j + 1) = """") {
+                Set cur = cur _ """"
+                Set j = j + 1
+            } Else {
+                Set inQuote = 'inQuote
+            }
+        } ElseIf (ch = delim) && 'inQuote {
+            Set fld(col) = cur
+            Set col = col + 1
+            Set cur = ""
+        } Else {
+            Set cur = cur _ ch
+        }
+        Set j = j + 1
+    }
+    Set fld(col) = cur
+    Return col
+}
+
+ClassMethod SplitCsvLine(line As %String, delim As %String, Output fld, colCount As %Integer) [ Internal ]
 {
     Kill fld
     If line '[ """" {
@@ -239,6 +269,39 @@ ClassMethod SplitCsvLine(line As %String, delim As %String, Output fld, colCount
     }
     Set fld(col) = cur
     Quit
+}
+
+/// A header cell turned into a valid SQL identifier.
+///
+/// This used to fall back to "colN" whenever the name was not already a valid
+/// identifier, which is how a header of "Date/Time, User ID" produced col1..colN.
+/// LOAD DATA then matches the target's column names against the FILE's header
+/// and fails with "Invalid VALUE column, 'col1' is not defined in header" - a
+/// message that names the symptom and hides the cause. Salvaging the real name
+/// keeps the two in step.
+ClassMethod SafeColumnName(raw As %String, position As %Integer) As %String [ Internal ]
+{
+    Set name = $ZStrip(raw, "<>W")
+    Set name = $ZStrip(name, "<>", """")
+    Set name = $ZStrip(name, "<>W")
+    Set out = ""
+    For i = 1:1:$Length(name) {
+        Set ch = $Extract(name, i)
+        If (ch ? 1AN) || (ch = "_") {
+            Set out = out _ ch
+        } ElseIf $Extract(out, *) '= "_" {
+            Set out = out _ "_"
+        }
+    }
+    Set out = $ZStrip(out, ">", "_")
+    // an identifier cannot start with a digit
+    If (out '= "") && '($Extract(out) ? 1A) {
+        Set out = "c_" _ out
+    }
+    If out = "" {
+        Set out = "col" _ position
+    }
+    Return $Extract(out, 1, 60)
 }
 
 /// 1=INTEGER 2=NUMERIC 3=DATE 4=VARCHAR (0 = empty/unknown)
