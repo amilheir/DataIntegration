@@ -325,6 +325,23 @@ body.kgchat #right { background-color: var(--paper); }
 .kgpulse { animation: kgblink 1.6s ease-in-out infinite; }
 @keyframes kgblink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .chat.kgstatus { font-style: italic; }
+
+/* One exchange: question, answer, and the records it came from. */
+.kgturn { display: contents; }
+
+/* Rendered markdown inside an answer bubble. Tight margins - a chat bubble is
+   not a document, and default list padding pushes the text off its own edge. */
+.kgmd { margin-top: .15rem; }
+.kgmd p { margin: 0 0 .45rem; }
+.kgmd p:last-child { margin-bottom: 0; }
+.kgmd ul, .kgmd ol { margin: .2rem 0 .45rem; padding-left: 1.15rem; }
+.kgmd li { margin: .12rem 0; }
+.kgmd li::marker { color: var(--ink-soft); }
+.kgmd code {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .86em;
+  background: var(--paper-deep); border-radius: 5px; padding: .05rem .25rem;
+}
+.kgmd .kgmdh { display: block; margin: .3rem 0 .15rem; }
 .toolbar { gap: .35rem; }
 .toolbar .btn { padding: .36rem .6rem; }
 .toolbar select { padding: .32rem .45rem; font-size: .82rem; }
@@ -5056,6 +5073,12 @@ function mcpDrawGraph(specs, tools) {
 const KG = { section: "embed", corpusId: null, corpus: null, corpora: [],
              running: false, stop: false, info: null };
 
+/* Is the newest-at-top thread on screen? The scroll behaviour of the whole
+   conversation pane depends on it, so both places ask the same question. */
+function kgChatOpen() {
+  return activeTab === "kg" && KG.section === "chat";
+}
+
 async function kgCall(path, payload) {
   const r = await fetch(api("/kg/" + path), payload === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -5342,10 +5365,19 @@ function kgSectionChat() {
     if (!q) return;
     input.value = "";
     go.disabled = true; input.disabled = true;
-    kgBubble("user", q);
+    // Each exchange is its own block inserted DIRECTLY BELOW the input, so the
+    // newest answer is the one under your eyes and older turns move down. A
+    // chat that appends downward buries the reply you are waiting for beneath
+    // the fold the moment the thread is more than a screen long.
+    const turn = document.createElement("div");
+    turn.className = "kgturn";
+    bar.after(turn);
+    kgBubble("user", q, turn);
+    // Show the turn that was just started, wherever the reader had scrolled to.
+    $("convo").scrollTop = 0;
     // A live status bubble, replaced in place by the answer: the model takes
     // tens of seconds and silence reads as a hang.
-    const status = kgBubble("status", "searching the embedded records...");
+    const status = kgBubble("status", "searching the embedded records...", turn);
     try {
       const started = await kgCall("ask", { corpusId: KG.corpusId, question: q });
       let last = "";
@@ -5361,9 +5393,13 @@ function kgSectionChat() {
           if (s.status === "error") {
             wfail("The answer could not be produced.", s.statusDetail);
           } else {
-            kgBubble("agent", s.answer);
-            kgSources(s.hits);
+            kgBubble("agent", s.answer, turn);
+            kgSources(s.hits, turn);
           }
+          // The answer lands tens of seconds after the question, by which time
+          // the reader may have scrolled off to read an older one. Bring them
+          // back to what they asked for.
+          $("convo").scrollTop = 0;
           break;
         }
         await new Promise(r => setTimeout(r, 1500));
@@ -5380,32 +5416,92 @@ function kgSectionChat() {
   await0(kgDrawGraph());
 }
 
-function kgBubble(role, text) {
+/* The chat model answers in markdown - bold, bullet lists, the occasional
+   numbered list - and escaping it wholesale printed the syntax at the reader:
+   "*   **[Reading Floor Lamp]:**". This renders the small subset the model
+   actually uses.
+
+   Order matters: the text is HTML-escaped FIRST and the markup applied to the
+   escaped text afterwards, so nothing the model writes can inject an element.
+   Only the tags below ever reach the page. */
+function kgMarkdown(raw) {
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>")
+    .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+
+  const out = [];
+  let list = null;                 // "ul" | "ol" | null
+  let para = [];
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const closePara = () => {
+    if (para.length) { out.push(`<p>${para.join("<br>")}</p>`); para = []; }
+  };
+
+  String(raw || "").split(/\r?\n/).forEach(line => {
+    const bullet = line.match(/^\s*[*+-]\s+(.*)$/);
+    const number = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const head   = line.match(/^\s*(#{1,4})\s+(.*)$/);
+    if (head) {
+      closePara(); closeList();
+      out.push(`<b class="kgmdh">${inline(head[2])}</b>`);
+    } else if (bullet) {
+      closePara();
+      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+      out.push(`<li>${inline(bullet[1])}</li>`);
+    } else if (number) {
+      closePara();
+      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+      out.push(`<li>${inline(number[1])}</li>`);
+    } else if (!line.trim()) {
+      closePara(); closeList();
+    } else {
+      closeList();
+      para.push(inline(line.trim()));
+    }
+  });
+  closePara(); closeList();
+  return out.join("");
+}
+
+/* `into` is the turn container. Bubbles no longer go straight to #convo,
+   because the newest turn sits at the TOP of the thread. */
+function kgBubble(role, text, into) {
   const div = document.createElement("div");
   div.className = "chat " + (role === "user" ? "user" : "agent");
   if (role === "status") {
     div.className = "chat agent kgstatus";
     div.innerHTML = `<span class="kgpulse">${esc(text)}</span>`;
+  } else if (role === "agent") {
+    div.innerHTML = `<span class="who">knowledge base</span>` +
+      `<div class="kgmd">${kgMarkdown(text)}</div>`;
   } else {
-    div.innerHTML = (role === "agent" ? `<span class="who">knowledge base</span>` : "") + esc(text);
+    div.innerHTML = esc(text);
   }
-  $("convo").appendChild(div);
-  scrollConvo();
+  (into || $("convo")).appendChild(div);
   return div;
 }
 
 /* What the answer was built from. An answer with no visible evidence is a
    claim; with its records beside it, it can be checked. */
-function kgSources(hits) {
+function kgSources(hits, into) {
   const chunks = (hits && hits.chunks) || [];
   if (!chunks.length) return;
-  const card = wmsg("formcard",
+  const card = kgCard(into,
     `<details style="width:100%"><summary class="w_details">the ${chunks.length} records this was answered from</summary>
        <div class="rptable" style="margin-top:.4rem"><table><thead><tr><th>score</th><th>label</th><th>text</th></tr></thead><tbody>` +
        chunks.map(h => `<tr><td class="num">${esc(h.score)}</td><td>${esc(h.label)}</td>` +
          `<td>${esc(h.text)}</td></tr>`).join("") +
      `</tbody></table></div></details>`);
   return card;
+}
+
+/* wmsg() always appends to #convo; a turn needs its card inside itself. */
+function kgCard(into, html) {
+  const d = el(`<div class="wmsg formcard">${html}</div>`).firstElementChild;
+  (into || $("convo")).appendChild(d);
+  return d;
 }
 
 /* ---- the constellation, in the right pane -------------------------------
@@ -5739,13 +5835,22 @@ refreshMcpTools();
 kgRefreshPresenter();
 await0(checkUiVersion());
 
-/* keep the conversation pinned to the newest message unless the user scrolled up */
+/* Keep the conversation pinned to the newest message unless the user scrolled
+   up. "Newest" is at the BOTTOM everywhere except the Knowledge Base chat,
+   which inserts each turn at the top - there this observer would have hauled
+   the view down to the oldest exchange every time an answer arrived. */
 (function () {
   const c = $("convo");
   let stick = true;
-  c.addEventListener("scroll", () => { stick = (c.scrollTop + c.clientHeight) >= (c.scrollHeight - 60); });
-  new MutationObserver(() => { if (stick) c.scrollTop = c.scrollHeight; })
-    .observe(c, { childList: true, subtree: true, characterData: true });
+  c.addEventListener("scroll", () => {
+    stick = kgChatOpen()
+      ? c.scrollTop <= 60
+      : (c.scrollTop + c.clientHeight) >= (c.scrollHeight - 60);
+  });
+  new MutationObserver(() => {
+    if (!stick) return;
+    c.scrollTop = kgChatOpen() ? 0 : c.scrollHeight;
+  }).observe(c, { childList: true, subtree: true, characterData: true });
 })();
 
 renderGraph();
