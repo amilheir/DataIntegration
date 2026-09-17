@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Data Integration &mdash; IRIS AI data pipelines</title>
+<title>Data Integrator &mdash; IRIS Data Pipelines</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,50&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..700&display=swap" rel="stylesheet">
@@ -259,6 +259,47 @@ body.kgchat #right { background-color: var(--paper); }
   fill: var(--ink-soft); pointer-events: none; text-anchor: middle;
   paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round;
 }
+
+/* A focused node and its neighbours stay lit; everything else fades. The
+   transition is what makes it read as "these, out of all of those" rather than
+   as a redraw - wikigraph's .2s, on the same properties. */
+#kgsky .kgnode, #kgsky .kglink, #kgsky .kgpred { transition: opacity .2s, stroke-opacity .2s; }
+#kgsky .kglink.hot { stroke: var(--teal); stroke-width: 1.6; }
+
+/* The info card: what this entity is, and every relation it takes part in.
+   Anchored to the graph box (wikigraph anchors to the viewport, which here
+   would put it over the chat pane) and slid in from the right edge. */
+#kginfo {
+  position: absolute; right: .7rem; top: .7rem; z-index: 6; width: 17rem;
+  max-height: calc(100% - 1.4rem); overflow-y: auto;
+  padding: .75rem .85rem; border: 1.5px solid var(--rule);
+  border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
+  transform: translateX(calc(100% + 1.4rem));
+  transition: transform .28s cubic-bezier(.4,0,.2,1);
+}
+#kginfo.open { transform: none; }
+#kginfo .kgiclose {
+  float: right; background: 0; border: 0; cursor: pointer; line-height: 1;
+  font-size: 1.2rem; color: var(--ink-soft); padding: 0 0 0 .4rem;
+}
+#kginfo .kginm {
+  font-family: "Newsreader", Georgia, serif; font-weight: 700; font-size: 1.15rem;
+  color: var(--ink); line-height: 1.15; padding-right: 1.2rem;
+}
+#kginfo .kgity { font-size: .78rem; color: var(--ink-soft); margin: .3rem 0 .1rem; }
+#kginfo .kgity .sw {
+  display: inline-block; width: 10px; height: 10px; border-radius: 99px;
+  margin-right: .35rem; box-shadow: 0 0 0 1.5px var(--card);
+}
+#kginfo .kgidesc { font-size: .78rem; color: var(--ink-soft); margin-top: .35rem; }
+#kginfo h4 {
+  font-variant: small-caps; letter-spacing: .12em; font-size: .72rem; font-weight: 400;
+  color: var(--ink); margin: .7rem 0 .3rem; border-top: 1px solid var(--rule); padding-top: .55rem;
+}
+#kginfo .kgirel { font-size: .8rem; color: var(--ink); line-height: 1.5; padding: .1rem 0; }
+#kginfo .kgirel .p { color: var(--amber-text); font-style: italic; }
+#kginfo .kgirel .o { color: var(--teal-text); font-weight: 700; cursor: pointer; }
+#kginfo .kgirel .o:hover { text-decoration: underline; }
 
 /* Bottom-left, as in wikigraph - but anchored to the graph box rather than the
    viewport, so it cannot drift over the chat in the other pane. */
@@ -805,8 +846,8 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
 <header>
   <div class="masthead">
     <div class="brand">
-      <h1><span class="t-etl">Data</span>&#8239;<span class="t-wiz">Integration</span></h1>
-      <div class="tagline">intersystems iris &middot; ai-guided data pipelines</div>
+      <h1><span class="t-etl">Data</span>&#8239;<span class="t-wiz">Integrator</span></h1>
+      <div class="tagline">lake engine &middot; ai-guided data pipelines</div>
     </div>
     <div class="headerTools">
       <span id="status" class="status">disconnected</span>
@@ -871,7 +912,7 @@ body[data-view="executive"] .pvwtitle { font-size: .74rem; color: var(--teal-tex
     <button class="tab" id="tab_sources" data-tab="sources" role="tab">Data Sources</button>
     <button class="tab" id="tab_etl" data-tab="etl" role="tab">ETL Interop</button>
     <button class="tab" id="tab_ml" data-tab="ml" role="tab">ML Models</button>
-    <button class="tab" id="tab_mcp" data-tab="mcp" role="tab">AI Tools</button>
+    <button class="tab" id="tab_mcp" data-tab="mcp" role="tab">MCP Tools</button>
     <button class="tab" id="tab_kg" data-tab="kg" role="tab">Knowledge Base</button>
   </div>
 </header>
@@ -944,7 +985,13 @@ const EXEC = () => VIEW === "executive";
 function sessGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
 function sessSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* private mode */ } }
 
-const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models", mcp: "AI Tools", kg: "Knowledge Base" };
+const TECH_TABS = { sources: "Data Sources", etl: "ETL Interop", ml: "ML Models", mcp: "MCP Tools", kg: "Knowledge Base" };
+/* Executive-only tab names. "MCP" is a protocol an engineer recognises and a
+   business audience does not; what the tab DOES for them is expose the data to
+   an AI assistant. Only names that genuinely read differently to the two
+   audiences belong here - the rest stay identical, which is the point of the
+   toggle. A configured scenario's own tab names still win over these. */
+const EXEC_TABS = { mcp: "AI Tools" };
 
 function applyView() {
   document.body.setAttribute("data-view", VIEW);
@@ -961,11 +1008,11 @@ function applyView() {
     const head = esc(words.shift()), tail = esc(words.join(" "));
     h1.innerHTML = `<span class="t-etl">${head}</span>&#8239;<span class="t-wiz">${tail}</span>`;
   } else {
-    h1.innerHTML = `<span class="t-etl">Data</span>&#8239;<span class="t-wiz">Integration</span>`;
+    h1.innerHTML = `<span class="t-etl">Data</span>&#8239;<span class="t-wiz">Integrator</span>`;
   }
   // tab labels: visible text only. data-tab and every internal id stay put -
   // showTab(), paneCache, chartCache and resetTab() all key off them.
-  const labels = EXEC() ? Object.assign({}, TECH_TABS, sc.tabs || {}) : TECH_TABS;
+  const labels = EXEC() ? Object.assign({}, TECH_TABS, EXEC_TABS, sc.tabs || {}) : TECH_TABS;
   document.querySelectorAll(".tab").forEach(t => { t.textContent = labels[t.dataset.tab] || t.textContent; });
   // Drive the disclosure's OPEN state, rather than relying on CSS to reveal the
   // contents of a closed <details>. Browsers differ on whether a display rule
@@ -4795,7 +4842,7 @@ async function renderMcpTab() {
     "assistant can call over MCP. Each tool is one SQL query with a description; " +
     "the assistant reads the descriptions, picks a tool, and charts what comes " +
     "back. Nothing is copied &mdash; every call runs against this database, and " +
-    "only SELECTs can be published.", "", "mcp");
+    "only SELECTs can be published.", "Ai Tools", "mcp");
 
   let pub = { tools: [], spec: [], endpoint: MCP.endpoint };
   try { pub = await mcpCall("published"); } catch (e) { /* wfail already drew */ }
@@ -4979,7 +5026,7 @@ function mcpStepConnect(res) {
   const toml = `endpoints = [{ path = "${ep}" }]`;
   const cfg = JSON.stringify({
     mcpServers: {
-      "iris-data-integration": {
+      "iris-data-integrator": {
         command: "docker",
         args: ["exec", "-i", "irisetlwizard-iris-1", "/usr/irissys/bin/iris-mcp-server",
                "--transport=stdio", "--config=/opt/irisbuild/config.toml", "run"]
@@ -5019,7 +5066,7 @@ function mcpStepConnect(res) {
   copy(b1, toml); copy(b2, cfg);
 
   wguide("Ask the assistant something like <i>&ldquo;chart revenue by country from " +
-    "the Data Integration tables&rdquo;</i>. It will call the schema tool first, then " +
+    "the Data Integrator tables&rdquo;</i>. It will call the schema tool first, then " +
     "the grouped-totals tool, and draw the chart from what comes back.");
 }
 
@@ -5175,6 +5222,15 @@ function kgSectionEmbed() {
          <label>Label column <select class="kg_label"></select></label>
        </div>
        <div class="kg_profile w_details" style="margin-top:.45rem"></div>
+       <!-- Only appears once this column already HAS a knowledge base: with
+            nothing to be incremental against the choice is not a choice. -->
+       <div class="kg_mode" style="display:none;margin-top:.5rem">
+         <div class="kgnavrow">
+           <button class="kgnavbtn on" data-mode="incremental">Incremental</button>
+           <button class="kgnavbtn" data-mode="redo">Redo</button>
+         </div>
+         <div class="kg_modenote w_details" style="margin-top:.3rem"></div>
+       </div>
        <div class="wrow" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.35rem">
          <label>Rows <input class="kg_rows" type="number" min="1" max="100000" value="500" size="6"></label>
          <label style="display:flex;gap:.3rem;align-items:baseline">
@@ -5188,11 +5244,13 @@ function kgSectionEmbed() {
         textColumn: c.querySelector(".kg_text").value,
         labelColumn: c.querySelector(".kg_label").value,
         rowLimit: +c.querySelector(".kg_rows").value || 500,
-        extractGraph: c.querySelector(".kg_extract").checked ? 1 : 0
+        extractGraph: c.querySelector(".kg_extract").checked ? 1 : 0,
+        mode: mode
       };
       const started = await kgCall("start", spec);
       KG.corpusId = started.id; KG.corpus = started;
-      wrecap(`Embedding <b>${esc(spec.textColumn)}</b> from <b>${esc(spec.table)}</b>` +
+      wrecap(`${spec.mode === "incremental" ? "Updating" : "Embedding"} ` +
+        `<b>${esc(spec.textColumn)}</b> from <b>${esc(spec.table)}</b>` +
         `${spec.extractGraph ? ", with graph extraction" : ""}.`);
       kgStepRun();
     });
@@ -5202,6 +5260,31 @@ function kgSectionEmbed() {
   const labelSel = card.querySelector(".kg_label");
   const profileBox = card.querySelector(".kg_profile");
   const warnBox = card.querySelector(".kg_extractwarn");
+  const modeBox = card.querySelector(".kg_mode");
+  const modeNote = card.querySelector(".kg_modenote");
+  // Redo is the default only because it is the only thing that works on a column
+  // nobody has embedded yet. As soon as there IS a knowledge base, runProfile
+  // flips this to incremental - repeating work is never the sensible default.
+  let mode = "redo", existing = null;
+
+  const paintMode = () => {
+    modeBox.querySelectorAll(".kgnavbtn").forEach(b =>
+      b.classList.toggle("on", b.dataset.mode === mode));
+    if (!existing) { modeNote.innerHTML = ""; return; }
+    const have = `<b>${existing.docs}</b> row(s) and <b>${existing.chunksIngested}</b> chunk(s) ` +
+      `already embedded as <b>${esc(existing.name)}</b>`;
+    modeNote.innerHTML = mode === "incremental"
+      ? `${have}. Rows it already holds are compared by content and skipped; only ` +
+        `new rows, and rows whose text has changed, are embedded. Changed rows have ` +
+        `their old chunks and facts replaced, not duplicated. <b>Rows</b> below caps ` +
+        `how many NEW rows this pass will take.`
+      : `${have} &mdash; and a redo builds a second knowledge base from scratch, ` +
+        `embedding every row again. Use it when the text means something different ` +
+        `now, or when you changed the chunk size or the label column.`;
+  };
+  modeBox.querySelectorAll(".kgnavbtn").forEach(b => {
+    b.onclick = e => { e.preventDefault(); mode = b.dataset.mode; paintMode(); };
+  });
 
   const fillColumns = () => {
     const t = cands.find(x => x.full === tableSel.value);
@@ -5219,6 +5302,10 @@ function kgSectionEmbed() {
     try {
       const p = await kgCall("profile", {
         table: tableSel.value, column: textSel.value });
+      existing = (p.existing && p.existing.id) ? p.existing : null;
+      mode = existing ? "incremental" : "redo";
+      modeBox.style.display = existing ? "" : "none";
+      paintMode();
       const want = +card.querySelector(".kg_rows").value || 500;
       const ms = +p.msPerRow || 0;
       const est = ms ? kgDuration((ms * Math.min(want, p.embeddableRows)) / 1000) : "unknown";
@@ -5285,10 +5372,17 @@ function kgStepRun() {
         KG.corpus = s;
         const secs = (Date.now() - started) / 1000;
         const rate = s.rowsIngested ? (s.rowsIngested / secs).toFixed(1) : "0";
+        // An incremental pass has no meaningful denominator: it embeds however
+        // many rows turn out to be new, and mostly scans. A bar filling towards
+        // the row CAP would read as progress towards a number nobody wants to
+        // reach, so there is no bar on that path.
+        const inc = s.ingestMode === "incremental";
+        bar.style.display = inc ? "none" : "";
         const pct = s.rowsRequested ? Math.min(100, (s.rowsIngested / s.rowsRequested) * 100) : 0;
         fill.style.width = pct + "%";
         prog.innerHTML =
-          `<b>${s.rowsIngested}</b> of ${s.rowsRequested} rows &middot; ` +
+          (inc ? `<b>${s.rowsIngested}</b> new or changed rows embedded &middot; `
+               : `<b>${s.rowsIngested}</b> of ${s.rowsRequested} rows &middot; `) +
           `<b>${s.chunksIngested}</b> chunks` +
           `${s.entities ? ` &middot; <b>${s.entities}</b> entities, ${s.relationships} relationships` : ""}<br>` +
           `<span class="w_details"><span class="kgpulse">${esc(s.statusDetail || "")}</span> &middot; ` +
@@ -5544,7 +5638,10 @@ async function kgDrawGraph() {
   // exists gave a height of whatever the previous content happened to be, so
   // the viewBox and the rendered box disagreed and the graph came out as specks
   // in a field of white.
-  flow.innerHTML = `<div class="kgwrap"><svg id="kgsky"></svg><div id="kglegend"></div></div>`;
+  flow.innerHTML = `<div class="kgwrap"><svg id="kgsky"></svg><div id="kglegend"></div>` +
+    `<div id="kginfo"><button class="kgiclose" title="Close">&times;</button>` +
+    `<div class="kginm"></div><div class="kgity"></div><div class="kgidesc"></div>` +
+    `<div class="kgibody"></div></div></div>`;
   const wrap = flow.querySelector(".kgwrap");
   const w = wrap.clientWidth || 600, h = wrap.clientHeight || 520;
   const svg = d3.select("#kgsky").attr("viewBox", `0 0 ${w} ${h}`)
@@ -5555,6 +5652,24 @@ async function kgDrawGraph() {
 
   const nodes = g.nodes.map(n => Object.assign({}, n));
   const links = g.links.map(l => Object.assign({}, l));
+
+  // Adjacency over EVERY relation, not the deduplicated set that gets drawn:
+  // one line on screen can stand for three facts, and the info card has to list
+  // all three. wikigraph makes the same split - some links to draw, all of them
+  // to read.
+  const byId = {}, adj = {};
+  nodes.forEach(n => { byId[n.id] = n; adj[n.id] = []; });
+  (g.allLinks || g.links).forEach(l => {
+    const src = (l.source && l.source.id) || l.source, tgt = (l.target && l.target.id) || l.target;
+    if (!adj[src] || !adj[tgt]) return;
+    adj[src].push({ id: tgt, predicate: l.predicate, dir: "out" });
+    adj[tgt].push({ id: src, predicate: l.predicate, dir: "in" });
+  });
+
+  // What is currently singled out. Shared with the legend rather than kept in
+  // two places, because the two ways of highlighting - by type, and by node -
+  // write to the same opacities and would otherwise undo each other.
+  const view = { focus: null, adj: adj };
 
   // A soft drop shadow lifts the nodes off the ground rather than letting them
   // sit flat among the edges - wikigraph's filter, values and all.
@@ -5655,7 +5770,56 @@ async function kgDrawGraph() {
     .on("drag", (ev, d) => { d.fx = ev.x; d.fy = ev.y; d.x = ev.x; d.y = ev.y; draw(); })
     .on("end", (ev, d) => { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
 
-  kgBuildLegend(nodes, node, link, label);
+  const applyHighlight = kgBuildLegend(nodes, node, link, label, view);
+
+  /* The info card. wikigraph's panel, same content and same reading order:
+     the name, what it is, then every relation it takes part in, each written
+     the way the fact runs - "trains -> Luke Skywalker", "<- portrayed Alec
+     Guinness" - so an inbound fact is not silently reversed into an outbound
+     one. Each other entity is clickable, which is how you walk the graph. */
+  const info = flow.querySelector("#kginfo");
+  const openInfo = d => {
+    info.querySelector(".kginm").textContent = d.name;
+    info.querySelector(".kgity").innerHTML =
+      `<span class="sw" style="background:${KG_TYPE_COLOR[d.type] || "#888"}"></span>` +
+      `${esc(d.type || "Unknown")} &middot; ${d.mentions} mention(s)`;
+    info.querySelector(".kgidesc").textContent = d.description || "";
+    const rels = adj[d.id] || [];
+    let html = `<h4>${rels.length || "no"} relation${rels.length === 1 ? "" : "s"}</h4>`;
+    rels.forEach(a => {
+      const other = byId[a.id];
+      html += `<div class="kgirel">` +
+        (a.dir === "out" ? "" : "&larr; ") +
+        `<span class="p">${esc(a.predicate || "related to")}</span>` +
+        (a.dir === "out" ? " &rarr; " : " ") +
+        `<span class="o" data-id="${escA(a.id)}">${esc(other ? other.name : a.id)}</span></div>`;
+    });
+    info.querySelector(".kgibody").innerHTML = html;
+    info.querySelectorAll(".kgibody .o").forEach(el => {
+      el.onclick = () => { const n = byId[+el.dataset.id]; if (n) focusNode(n); };
+    });
+    info.classList.add("open");
+  };
+  const closeInfo = () => info.classList.remove("open");
+  const focusNode = d => { view.focus = d.id; applyHighlight(); openInfo(d); };
+  const clearFocus = () => { view.focus = null; applyHighlight(); closeInfo(); };
+  info.querySelector(".kgiclose").onclick = e => { e.preventDefault(); clearFocus(); };
+
+  // Click a node to single it out with everything it is connected to; click it
+  // again, or the empty canvas, to put the rest back. wikigraph's gesture, and
+  // the reason it is worth having: on a constellation of fifty dots, "what is
+  // this one connected to" is answered by looking rather than by tracing lines.
+  node.style("cursor", "pointer").on("click", (ev, d) => {
+    ev.stopPropagation();
+    if (view.focus === d.id) { clearFocus(); } else { focusNode(d); }
+  });
+  // only a click on the canvas ITSELF - a click that lands on a node has
+  // already been handled and stopped above
+  svg.on("click", ev => {
+    if (ev.target !== svg.node()) return;
+    if (view.focus === null) return;
+    clearFocus();
+  });
 
   // The pane changes width with the focus toggle and the window; a graph fitted
   // to the old box is the same wasted-space problem again.
@@ -5673,16 +5837,17 @@ async function kgDrawGraph() {
    highlight, pick several. It doubles as the only place the type colours are
    explained - without it the constellation is a field of coloured dots whose
    colours mean nothing to the person looking at it. */
-function kgBuildLegend(nodes, nodeSel, linkSel, labelSel) {
+function kgBuildLegend(nodes, nodeSel, linkSel, labelSel, view) {
   const box = $("kglegend");
+  view = view || { focus: null };
   const counts = new Map();
   nodes.forEach(n => counts.set(n.type || "Unknown", (counts.get(n.type || "Unknown") || 0) + 1));
   const types = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
-  if (!types.length) { box.innerHTML = ""; return; }
+  if (!types.length) { box.innerHTML = ""; return () => {}; }
 
   box.innerHTML =
     `<div class="kglh">entity types</div>` +
-    `<div class="kglhint">click to highlight &middot; pick several</div>` +
+    `<div class="kglhint">click to highlight &middot; pick several &middot; or click a node</div>` +
     `<div class="kglbody">` +
     types.map(t => `<div class="kgleg" data-type="${escA(t)}">` +
       `<span class="sw" style="background:${KG_TYPE_COLOR[t] || "#888"}"></span>` +
@@ -5703,13 +5868,30 @@ function kgBuildLegend(nodes, nodeSel, linkSel, labelSel) {
   let labelsShown = true;
   const apply = () => {
     box.querySelectorAll(".kgleg").forEach(r => r.classList.toggle("sel", active.has(r.dataset.type)));
-    box.querySelector(".kglclear").classList.toggle("show", active.size > 0);
-    const on = d => active.size === 0 || active.has(d.type || "Unknown");
+    box.querySelector(".kglclear").classList.toggle("show", active.size > 0 || view.focus !== null);
+    // A focused node overrides the type selection outright rather than
+    // intersecting with it: picking one node out of the field is a narrower
+    // question than picking a type, and an intersection of the two can be
+    // empty, which reads as a bug.
+    //
+    // "Lit" means the node AND everything it is connected to. A node alone,
+    // with every edge it owns dimmed to nothing, answers "where is it" and not
+    // "what is it about" - which is the question being asked by clicking it.
+    const keep = (view.focus === null) ? null
+      : new Set([view.focus].concat(((view.adj || {})[view.focus] || []).map(a => a.id)));
+    const on = d => keep ? keep.has(d.id)
+                         : (active.size === 0 || active.has(d.type || "Unknown"));
     nodeSel.style("opacity", d => on(d) ? 1 : .12);
-    // an edge stays lit only while BOTH ends are, so a highlighted type shows
-    // its own connections rather than half-edges into dimmed nodes
-    const edgeOn = d => active.size === 0 || (on(d.source) && on(d.target));
-    linkSel.style("opacity", d => edgeOn(d) ? .6 : .05);
+    // An edge stays lit only while BOTH ends are, so a highlighted type shows
+    // its own connections rather than half-edges into dimmed nodes. With a node
+    // focused it is narrower still: only ITS OWN edges, never every edge among
+    // its neighbours - that would light a second ring of facts that have
+    // nothing to do with the thing that was clicked.
+    const incident = d => (d.source.id === view.focus) || (d.target.id === view.focus);
+    const edgeOn = d => keep ? incident(d)
+                             : (active.size === 0 || (on(d.source) && on(d.target)));
+    linkSel.classed("hot", d => keep !== null && incident(d))
+           .style("opacity", d => edgeOn(d) ? (keep ? .85 : .6) : .05);
     labelSel.style("display", labelsShown ? null : "none")
             .style("opacity", d => edgeOn(d) ? 1 : .05);
     box.querySelector(".kgllinks").textContent =
@@ -5718,13 +5900,23 @@ function kgBuildLegend(nodes, nodeSel, linkSel, labelSel) {
   box.querySelectorAll(".kgleg").forEach(r => {
     r.onclick = () => {
       const t = r.dataset.type;
+      // picking a type is a new question: drop any single node being focused,
+      // or the click would look like it did nothing
+      view.focus = null;
       if (active.has(t)) { active.delete(t); } else { active.add(t); }
       apply();
     };
   });
   box.querySelector(".kgllinks").onclick = e => { e.preventDefault(); labelsShown = !labelsShown; apply(); };
-  box.querySelector(".kglall").onclick = e => { e.preventDefault(); types.forEach(t => active.add(t)); apply(); };
-  box.querySelector(".kglclear").onclick = e => { e.preventDefault(); active.clear(); apply(); };
+  box.querySelector(".kglall").onclick = e => {
+    e.preventDefault(); view.focus = null; types.forEach(t => active.add(t)); apply();
+  };
+  box.querySelector(".kglclear").onclick = e => {
+    e.preventDefault(); view.focus = null; active.clear(); apply();
+  };
+  // handed back so a node click can re-run exactly this, instead of a second
+  // copy of the opacity rules drifting out of step with these
+  return apply;
 }
 
 async function renderEtlTab() {

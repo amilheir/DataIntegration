@@ -380,7 +380,7 @@ ClassMethod Scenario() As %DynamicObject
         // word in ink and the rest in the teal italic. Generic to the discipline
         // rather than to this instance - and it drops "Demo", which is what a
         // business audience should not be reading off the wall (UX-4 / VD-1).
-        "title": "Data Integration",
+        "title": "Data Integrator",
         // The question is rendered as HTML, so an entity is fine here. The
         // sources and the note below are ESCAPED by the opening card, so they
         // must be plain ASCII - an "&mdash;" there would print literally.

@@ -23,6 +23,19 @@ Parameter MINTEXTWIDTH = 60;
 /// row at 32 (31 ms/row vs 247 ms unbatched and 39 ms at 128).
 Parameter BATCHROWS = 32;
 
+/// Rows per batch when graph extraction is on, which is a different problem
+/// entirely. One /run call is one HTTP request, and the Web Gateway gives up on
+/// it after 300 s (Server_Response_Timeout). Embedding 32 rows takes about a
+/// second; extracting them calls the model once per CHUNK, measured anywhere
+/// between 9 s and 40 s depending on the text. At 32 chunks that is 5 to 21
+/// minutes in one request - whether it fits under the ceiling is luck, and when
+/// it loses the gateway returns 504, the process is interrupted mid-parse and
+/// the extraction is thrown away.
+///
+/// 4 rows keeps the worst measured case (~40 s/chunk) at ~160 s, inside the
+/// ceiling with room to spare. Batches are cheap to add: each one commits.
+Parameter EXTRACTBATCHROWS = 4;
+
 /// Default characters per chunk. High on purpose: a product description or a
 /// feedback comment is one chunk, and the splitter only earns its keep on logs
 /// and long-form text.
@@ -161,11 +174,40 @@ ClassMethod Profile(table As %String, column As %String) As %DynamicObject
         }
         Return {"table": (full), "column": (column), "rows": (rows),
                 "embeddableRows": (nonEmpty),
+                // what makes the Incremental / Redo choice offerable at all
+                "existing": (..FindCorpus(full, column)),
                 "avgChars": (##class(ETLWizard.KG.Setup).Round(+avgLen, 0)), "maxChars": (+maxLen),
                 "msPerRow": (msPerRow), "batchSize": (..#BATCHROWS)}
     } Catch ex {
         Return {"error": (ex.DisplayString())}
     }
+}
+
+/// The newest knowledge base built from this table and column, or {} when there
+/// is none. The UI asks before offering Incremental: there has to be something
+/// to be incremental against.
+ClassMethod FindCorpus(table As %String, column As %String) As %DynamicObject
+{
+    If '..SplitTable(table, .schema, .bare) {
+        Return {}
+    }
+    Set id = ##class(ETLWizard.Tools.Util).ScalarQuery(
+        "SELECT TOP 1 %ID FROM ETLW_KG.Corpus WHERE UPPER(sourceTable) = ? AND UPPER(textColumn) = ? " _
+        "ORDER BY %ID DESC",
+        $ZConvert(schema _ "." _ bare, "U"), $ZConvert(column, "U"))
+    If ($Extract(id, 1, 5) = "ERROR") || (id = "") {
+        Return {}
+    }
+    Return ..Status(id)
+}
+
+/// A hash of the text that would be embedded. This is what lets a second pass
+/// recognise a row it has already paid for: comparing 28 characters costs
+/// nothing, embedding costs ~31 ms even batched, and the extraction that may
+/// follow costs ~40 s per chunk.
+ClassMethod TextHash(text As %String) As %String [ Internal ]
+{
+    Return $System.Encryption.Base64Encode($System.Encryption.SHA1Hash(text))
 }
 
 // --------------------------------------------------------------- lifecycle
@@ -197,12 +239,39 @@ ClassMethod Start(spec As %DynamicObject) As %DynamicObject
         If name = "" {
             Set name = bare _ "." _ textCol
         }
+
+        // INCREMENTAL reuses the knowledge base already built from this column
+        // and walks the table looking for rows it has not seen, or has seen with
+        // different text. REDO builds a new one from nothing, which is what this
+        // always used to do - pressing the button twice embedded the whole table
+        // a second time into a duplicate corpus and paid for every row again.
+        //
+        // The cursor goes back to 0 because new rows are not necessarily at the
+        // end: a bulk reload TRUNCATEs and re-inserts, so an added row can carry
+        // any %ID. A full scan is the only honest way to find them, and the hash
+        // is what keeps it cheap.
+        If $ZConvert(spec.%Get("mode", "redo"), "L") = "incremental" {
+            Set prior = ..FindCorpus(full, textCol)
+            If prior.%Get("id", "") '= "" {
+                Set res = ##class(ETLWizard.Tools.Util).RunDML(
+                    "UPDATE ETLW_KG.Corpus SET status = 'queued', statusDetail = 'looking for new or changed rows', " _
+                    "ingestMode = 'incremental', rowsRequested = ?, extractGraph = ?, chunkChars = ?, " _
+                    "lastRowId = 0, startedAt = ?, finishedAt = NULL WHERE %ID = ?",
+                    +spec.%Get("rowLimit", 500), ''spec.%Get("extractGraph", 0),
+                    +spec.%Get("chunkChars", ..#CHUNKCHARS), $ZDateTime($Horolog, 3), prior.id)
+                If $Extract(res, 1, 5) = "ERROR" {
+                    Return {"error": (res)}
+                }
+                Return ..Status(prior.id)
+            }
+            // nothing to resume against: fall through and build one
+        }
         Set res = ##class(ETLWizard.Tools.Util).RunDML(
             "INSERT INTO ETLW_KG.Corpus (name, sourceTable, textColumn, labelColumn, keyColumns, " _
             "rowsRequested, rowsIngested, chunksIngested, chunkChars, batchSize, extractGraph, " _
             "embedModel, chatModel, status, statusDetail, autoRefresh, refreshCap, keyMode, " _
-            "startedAt, lastRowId, lastSeenAt) " _
-            "VALUES (?,?,?,?,?,?,0,0,?,?,?,?,?,'queued','waiting to start',?,?,?,?,0,'')",
+            "ingestMode, startedAt, lastRowId, lastSeenAt) " _
+            "VALUES (?,?,?,?,?,?,0,0,?,?,?,?,?,'queued','waiting to start',?,?,?,'redo',?,0,'')",
             name, full, textCol, labelCol, keyCols,
             +spec.%Get("rowLimit", 500), +spec.%Get("chunkChars", ..#CHUNKCHARS), ..#BATCHROWS,
             ''spec.%Get("extractGraph", 0),
@@ -264,13 +333,25 @@ ClassMethod RunBatch(corpusId As %String) As %DynamicObject
             Return ..Status(corpusId)
         }
 
+        // rowsIngested means "rows embedded on THIS pass" for an incremental
+        // run, so the row cap reads as "new rows this time" rather than "rows
+        // ever" - a cap of 500 against a corpus that already holds 500 would
+        // otherwise finish before looking at anything.
+        If (c.status = "queued") && (c.%Get("ingestMode", "") = "incremental") {
+            Do ##class(ETLWizard.Tools.Util).RunDML(
+                "UPDATE ETLW_KG.Corpus SET rowsIngested = 0 WHERE %ID = ?", corpusId)
+            Set c = ..Corpus(corpusId)
+        }
+        Set incremental = (c.%Get("ingestMode", "") = "incremental")
+
         Set remaining = c.rowsRequested - c.rowsIngested
         If remaining <= 0 {
             Do ..Finish(corpusId, "complete", "ingested " _ c.rowsIngested _ " rows")
             Lock -^ETLWizard.KGLock(corpusId)
             Return ..Status(corpusId)
         }
-        Set take = $Select(remaining < ..#BATCHROWS: remaining, 1: ..#BATCHROWS)
+        Set batch = $Select(''c.extractGraph: ..#EXTRACTBATCHROWS, 1: ..#BATCHROWS)
+        Set take = $Select(remaining < batch: remaining, 1: batch)
 
         Do ..Mark(corpusId, "running", "reading rows")
         Set rows = ..ReadRows(c, take, .readErr)
@@ -280,7 +361,9 @@ ClassMethod RunBatch(corpusId As %String) As %DynamicObject
             Return ..Status(corpusId)
         }
         If rows.%Size() = 0 {
-            Do ..Finish(corpusId, "complete", "no more rows with text to embed")
+            Do ..Finish(corpusId, "complete", $Select(
+                incremental: "up to date - embedded " _ c.rowsIngested _ " new or changed row(s)",
+                1: "no more rows with text to embed"))
             Lock -^ETLWizard.KGLock(corpusId)
             Return ..Status(corpusId)
         }
@@ -373,7 +456,8 @@ ClassMethod EmbedAndStore(corpusId As %String, c As %DynamicObject, rows As %Dyn
     Set texts = [], meta = []
     Set lastRowId = +c.lastRowId
     Set iter = rows.%GetIterator()
-    Set skipped = 0
+    Set skipped = 0, unchanged = 0, replaced = 0
+    Set incremental = (c.%Get("ingestMode", "") = "incremental")
     While iter.%GetNext(, .row) {
         If row.rowId > lastRowId {
             Set lastRowId = row.rowId
@@ -382,6 +466,27 @@ ClassMethod EmbedAndStore(corpusId As %String, c As %DynamicObject, rows As %Dyn
         If $Length(text) < ..#MINCHARS {
             Set skipped = skipped + 1
             Continue
+        }
+        Set hash = ..TextHash(text)
+        If incremental {
+            Set priorDoc = ..DocFor(corpusId, row.key)
+            If priorDoc '= "" {
+                Set priorHash = ..DocHash(priorDoc)
+                If priorHash = "" {
+                    // Embedded before hashes were recorded. Rather than charge
+                    // for every row of every corpus built before this existed,
+                    // recover the hash from the chunks themselves.
+                    Set priorHash = ..BackfillHash(priorDoc)
+                }
+                If priorHash = hash {
+                    Set unchanged = unchanged + 1
+                    Continue
+                }
+                // Same row, different text: its chunks describe text that no
+                // longer exists, so they are replaced rather than added to.
+                Do ..ClearDoc(priorDoc)
+                Set replaced = replaced + 1
+            }
         }
         // Chunk RETURNS the count and fills `pieces` by reference - assigning
         // its return over the array was what wiped it.
@@ -395,11 +500,24 @@ ClassMethod EmbedAndStore(corpusId As %String, c As %DynamicObject, rows As %Dyn
             Set embedText = $Select(row.label = "": body, 1: row.label _ " - " _ body)
             Do texts.%Push($Extract(embedText, 1, 30900))
             Do meta.%Push({"key": (row.key), "rowId": (row.rowId), "label": (row.label),
-                           "chunkIndex": (p - 1), "text": ($Extract(body, 1, 29000))})
+                           "chunkIndex": (p - 1), "text": ($Extract(body, 1, 29000)),
+                           "hash": (hash)})
         }
     }
+    If replaced {
+        // An entity left with no mentions at all is one the text no longer says.
+        // Swept once per batch rather than once per row - it is a corpus-wide
+        // query - and before extraction, which re-creates whatever is still true.
+        Do ..SweepOrphanEntities(corpusId)
+    }
     If texts.%Size() = 0 {
-        Do ..Advance(corpusId, lastRowId, rows.%Size(), 0)
+        // Nothing new in this slice. Still advance the cursor, or an incremental
+        // pass over an unchanged table would read the same 32 rows for ever.
+        Do ..Advance(corpusId, lastRowId, 0, 0)
+        If incremental {
+            Do ..Mark(corpusId, "running",
+                "scanning - " _ unchanged _ " row(s) already embedded and unchanged")
+        }
         Return ""
     }
 
@@ -416,7 +534,7 @@ ClassMethod EmbedAndStore(corpusId As %String, c As %DynamicObject, rows As %Dyn
     Kill docCache
     While mIter.%GetNext(, .m) {
         Set i = i + 1
-        Set docId = ..UpsertDoc(corpusId, m.key, m.rowId, m.label, .docCache)
+        Set docId = ..UpsertDoc(corpusId, m.key, m.rowId, m.label, m.hash, .docCache)
         If docId = "" {
             Continue
         }
@@ -432,7 +550,27 @@ ClassMethod EmbedAndStore(corpusId As %String, c As %DynamicObject, rows As %Dyn
         Do chunkIds.%Push({"id": (chunkId), "text": (m.text), "label": (m.label)})
     }
 
-    Do ..Advance(corpusId, lastRowId, rows.%Size(), chunkIds.%Size())
+    // Count the rows this batch actually embedded. On an incremental pass a
+    // "rows ingested" that counted everything it skipped would make both the cap
+    // and the progress line meaningless.
+    Set embedded = 0, seen = ","
+    Set cIter = meta.%GetIterator()
+    While cIter.%GetNext(, .m) {
+        If seen '[ ("," _ m.key _ ",") {
+            Set seen = seen _ m.key _ ",", embedded = embedded + 1
+        }
+    }
+    Do ..Advance(corpusId, lastRowId, $Select(incremental: embedded, 1: rows.%Size()), chunkIds.%Size())
+    If incremental {
+        // chunksIngested is a running total that ClearDoc can take away from, so
+        // on this path it is read back from the chunks rather than added up.
+        Do ##class(ETLWizard.Tools.Util).RunDML(
+            "UPDATE ETLW_KG.Corpus SET chunksIngested = " _
+            "(SELECT COUNT(*) FROM ETLW_KG.Chunk WHERE corpusRef = ?) WHERE %ID = ?", corpusId, corpusId)
+        Do ..Mark(corpusId, "running", "embedded " _ embedded _ " row(s)" _
+            $Select(replaced: " (" _ replaced _ " changed)", 1: "") _
+            $Select(unchanged: ", skipped " _ unchanged _ " unchanged", 1: ""))
+    }
 
     If ''c.extractGraph {
         Set err = ..ExtractInto(corpusId, chunkIds)
@@ -479,7 +617,7 @@ ClassMethod Chunk(text As %String, maxChars As %Integer, Output pieces As %Strin
 
 /// Find or create the Doc for a source key. `cache` avoids re-querying within a
 /// batch when several chunks belong to one row.
-ClassMethod UpsertDoc(corpusId As %String, key As %String, rowId As %String, label As %String, ByRef cache) As %String [ Internal ]
+ClassMethod UpsertDoc(corpusId As %String, key As %String, rowId As %String, label As %String, hash As %String, ByRef cache) As %String [ Internal ]
 {
     If $Data(cache(key)) {
         Return cache(key)
@@ -487,18 +625,90 @@ ClassMethod UpsertDoc(corpusId As %String, key As %String, rowId As %String, lab
     Set id = ##class(ETLWizard.Tools.Util).ScalarQuery(
         "SELECT TOP 1 %ID FROM ETLW_KG.Doc WHERE corpusRef = ? AND sourceKey = ?", corpusId, key)
     If ($Extract(id, 1, 5) '= "ERROR") && (id '= "") {
+        // Re-embedding a row whose text changed: record the new hash, or the
+        // next incremental pass keeps finding it changed and pays again.
+        Do ##class(ETLWizard.Tools.Util).RunDML(
+            "UPDATE ETLW_KG.Doc SET textHash = ?, sourceRowId = ?, refreshedAt = ? WHERE %ID = ?",
+            hash, rowId, $ZDateTime($Horolog, 3), id)
         Set cache(key) = id
         Return id
     }
     Set res = ##class(ETLWizard.Tools.Util).RunDML(
-        "INSERT INTO ETLW_KG.Doc (corpusRef, sourceKey, sourceRowId, label, ingestedAt) VALUES (?,?,?,?,?)",
-        corpusId, key, rowId, $Extract(label, 1, 1000), $ZDateTime($Horolog, 3))
+        "INSERT INTO ETLW_KG.Doc (corpusRef, sourceKey, sourceRowId, label, textHash, ingestedAt) " _
+        "VALUES (?,?,?,?,?,?)",
+        corpusId, key, rowId, $Extract(label, 1, 1000), hash, $ZDateTime($Horolog, 3))
     If $Extract(res, 1, 5) = "ERROR" {
         Return ""
     }
     Set id = ##class(ETLWizard.Tools.Util).ScalarQuery("SELECT TOP 1 %ID FROM ETLW_KG.Doc ORDER BY %ID DESC")
     Set cache(key) = id
     Return id
+}
+
+/// The Doc already holding this source key in this corpus, or "".
+ClassMethod DocFor(corpusId As %String, key As %String) As %String [ Internal ]
+{
+    Set id = ##class(ETLWizard.Tools.Util).ScalarQuery(
+        "SELECT TOP 1 %ID FROM ETLW_KG.Doc WHERE corpusRef = ? AND sourceKey = ?", corpusId, key)
+    Return $Select($Extract(id, 1, 5) = "ERROR": "", 1: id)
+}
+
+ClassMethod DocHash(docId As %String) As %String [ Internal ]
+{
+    Set h = ##class(ETLWizard.Tools.Util).ScalarQuery(
+        "SELECT TOP 1 textHash FROM ETLW_KG.Doc WHERE %ID = ?", docId)
+    Return $Select($Extract(h, 1, 5) = "ERROR": "", 1: h)
+}
+
+/// Recover a doc's text hash from the chunks already stored for it, and record
+/// it. Returns "" when it cannot be established - a doc with no chunks, which is
+/// then treated as changed and embedded.
+ClassMethod BackfillHash(docId As %String) As %String [ Internal ]
+{
+    Set text = ""
+    Set stmt = ##class(%SQL.Statement).%New()
+    Set stmt.%SelectMode = 1
+    If $$$ISERR(stmt.%Prepare("SELECT chunkText FROM ETLW_KG.Chunk WHERE docRef = ? ORDER BY chunkIndex")) {
+        Return ""
+    }
+    Set rs = stmt.%Execute(docId)
+    Set n = 0
+    While rs.%Next() {
+        Set n = n + 1
+        Set text = text _ $Select(n = 1: "", 1: $Char(10)) _ rs.%GetData(1)
+    }
+    If n = 0 {
+        Return ""
+    }
+    Set hash = ..TextHash(text)
+    Do ##class(ETLWizard.Tools.Util).RunDML(
+        "UPDATE ETLW_KG.Doc SET textHash = ? WHERE %ID = ?", hash, docId)
+    Return hash
+}
+
+/// Throw away everything one doc contributed, so re-embedding it REPLACES its
+/// chunks and facts instead of doubling them. The Doc row itself stays: it is
+/// the identity of the source row, and UpsertDoc updates its hash in place.
+ClassMethod ClearDoc(docId As %String) [ Internal ]
+{
+    Do ##class(ETLWizard.Tools.Util).RunDML(
+        "DELETE FROM ETLW_KG.Mention WHERE chunkRef IN (SELECT %ID FROM ETLW_KG.Chunk WHERE docRef = ?)", docId)
+    Do ##class(ETLWizard.Tools.Util).RunDML(
+        "DELETE FROM ETLW_KG.Relationship WHERE chunkRef IN (SELECT %ID FROM ETLW_KG.Chunk WHERE docRef = ?)", docId)
+    Do ##class(ETLWizard.Tools.Util).RunDML("DELETE FROM ETLW_KG.Chunk WHERE docRef = ?", docId)
+}
+
+/// Entities nothing mentions any more, and the mention counts of the rest -
+/// which the graph sizes its nodes by, so a stale count is visible.
+ClassMethod SweepOrphanEntities(corpusId As %String) [ Internal ]
+{
+    Do ##class(ETLWizard.Tools.Util).RunDML(
+        "DELETE FROM ETLW_KG.Entity WHERE corpusRef = ? AND %ID NOT IN " _
+        "(SELECT entityRef FROM ETLW_KG.Mention WHERE corpusRef = ?)", corpusId, corpusId)
+    Do ##class(ETLWizard.Tools.Util).RunDML(
+        "UPDATE ETLW_KG.Entity SET mentionCount = " _
+        "(SELECT COUNT(*) FROM ETLW_KG.Mention m WHERE m.entityRef = ETLW_KG.Entity.%ID) " _
+        "WHERE corpusRef = ?", corpusId)
 }
 
 // ------------------------------------------------------------------- graph
@@ -674,7 +884,8 @@ ClassMethod Corpus(corpusId As %String) As %DynamicObject [ Internal ]
     Set stmt.%SelectMode = 1
     Set sc = stmt.%Prepare("SELECT %ID, name, sourceTable, textColumn, labelColumn, keyColumns, " _
         "rowsRequested, rowsIngested, chunksIngested, chunkChars, extractGraph, status, statusDetail, " _
-        "autoRefresh, refreshCap, keyMode, lastRowId, lastSeenAt, chatModel, startedAt, finishedAt " _
+        "autoRefresh, refreshCap, keyMode, lastRowId, lastSeenAt, chatModel, startedAt, finishedAt, " _
+        "ingestMode " _
         "FROM ETLW_KG.Corpus WHERE %ID = ?")
     If $$$ISERR(sc) {
         Return {"error": ($System.Status.GetErrorText(sc))}
@@ -690,7 +901,8 @@ ClassMethod Corpus(corpusId As %String) As %DynamicObject [ Internal ]
             "extractGraph": (+rs.%GetData(11)), "status": (rs.%GetData(12)), "statusDetail": (rs.%GetData(13)),
             "autoRefresh": (+rs.%GetData(14)), "refreshCap": (+rs.%GetData(15)), "keyMode": (rs.%GetData(16)),
             "lastRowId": (+rs.%GetData(17)), "lastSeenAt": (rs.%GetData(18)), "extractModel": (rs.%GetData(19)),
-            "startedAt": (rs.%GetData(20)), "finishedAt": (rs.%GetData(21))}
+            "startedAt": (rs.%GetData(20)), "finishedAt": (rs.%GetData(21)),
+            "ingestMode": (rs.%GetData(22))}
 }
 
 /// Corpus plus live graph counts - what the tab polls.
@@ -799,7 +1011,11 @@ ClassMethod Graph(corpusId As %String, limit As %Integer = 200) As %DynamicObjec
         // predicate labels stacked on top of each other - unreadable, and the
         // second label tells the reader nothing the first did not. The first is
         // kept, the rest are counted so the pane can say they exist.
-        Set links = [], seenPair = "", hidden = 0
+        // `links` is what is DRAWN; `allLinks` is every relation between shown
+        // entities, which is what the info card lists. The card must not inherit
+        // the drawing's deduplication: "provides" and "has quality" between the
+        // same pair are two facts even though they are one line.
+        Set links = [], allLinks = [], seenPair = "", hidden = 0
         Set stmt2 = ##class(%SQL.Statement).%New()
         // The macro argument must not span lines - the preprocessor rejects it
         // with "Macro referenced without correct principal".
@@ -814,6 +1030,7 @@ ClassMethod Graph(corpusId As %String, limit As %Integer = 200) As %DynamicObjec
                 If (keep '[ ("," _ src _ ",")) || (keep '[ ("," _ tgt _ ",")) {
                     Continue
                 }
+                Do allLinks.%Push({"source": (+src), "target": (+tgt), "predicate": (rs2.%GetData(3))})
                 // unordered: A->B and B->A occupy the same line on screen
                 Set pair = $Select(+src < +tgt: src _ "-" _ tgt, 1: tgt _ "-" _ src)
                 If seenPair [ ("," _ pair _ ",") {
@@ -824,7 +1041,7 @@ ClassMethod Graph(corpusId As %String, limit As %Integer = 200) As %DynamicObjec
                 Do links.%Push({"source": (+src), "target": (+tgt), "predicate": (rs2.%GetData(3))})
             }
         }
-        Return {"nodes": (nodes), "links": (links), "total": (total),
+        Return {"nodes": (nodes), "links": (links), "allLinks": (allLinks), "total": (total),
                 "shown": (nodes.%Size()), "trimmed": (total - nodes.%Size()),
                 "linksHidden": (hidden)}
     } Catch ex {

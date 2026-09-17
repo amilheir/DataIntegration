@@ -189,12 +189,37 @@ ClassMethod CreateSchema(verbose As %Boolean = 0) As %String
             Write "created ", key, !
         }
     }
+    // Columns added after the schema first shipped. The loop above skips a table
+    // that already exists, so a new column needs its own idempotent step or an
+    // instance built before the change never gets it.
+    Set err = ..EnsureColumn("Corpus", "ingestMode", "VARCHAR(20)")
+    If err '= "" {
+        Return err
+    }
+
     // An HNSW index that failed to create leaves the table with NO index, which
     // downstream is indistinguishable from a slow one - every query silently
     // full-scans. Verify rather than trust the SQLCODE alone.
     Set missing = ..MissingIndexes()
     If missing '= "" {
         Return "these vector indexes are not present after creation: " _ missing
+    }
+    Return ""
+}
+
+/// Add a column to an existing ETLW_KG table if it is not there yet.
+ClassMethod EnsureColumn(table As %String, column As %String, type As %String) As %String [ Internal ]
+{
+    Set have = +##class(ETLWizard.Tools.Util).ScalarQuery(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS " _
+        "WHERE TABLE_SCHEMA = 'ETLW_KG' AND TABLE_NAME = ? AND COLUMN_NAME = ?", table, column)
+    If have {
+        Return ""
+    }
+    Set res = ##class(ETLWizard.Tools.Util).RunDDL(
+        "ALTER TABLE ETLW_KG." _ table _ " ADD COLUMN " _ column _ " " _ type)
+    If $Extract(res, 1, 5) = "ERROR" {
+        Return "adding " _ table _ "." _ column _ ": " _ res
     }
     Return ""
 }
