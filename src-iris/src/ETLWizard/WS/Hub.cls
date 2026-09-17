@@ -18,6 +18,30 @@ Property RunId As %String;
 /// Replay/live cursor — last Seq pushed to this client
 Property LastSeq As %Integer [ InitialExpression = 0 ];
 
+/// True until the first catch-up pass has run.
+///
+/// This is what keeps a streamed answer from rendering twice. `agent.delta`
+/// events are the answer being typed; the `agent.note` that follows is the
+/// same answer, whole. A client replaying the log from a cursor would receive
+/// both and render both, so the deltas are treated as EPHEMERAL: they are
+/// pushed only to a client that is already live, never replayed. The durable
+/// record is, and stays, the note.
+///
+/// The alternative - having the client coalesce - was rejected as the primary
+/// mechanism because it puts correctness in every future reader of the log
+/// rather than in one place. The client coalesces anyway, because a client
+/// connecting MID-turn still sees the tail of the deltas, but it never has to
+/// undo a full replay.
+Property Replaying As %Boolean [ InitialExpression = 1 ];
+
+/// Seconds between live-push polls. The persisted log is the bus, so this tick
+/// bounds how fast anything - a node status, a streamed token - can reach the
+/// client: what arrives is max(producer interval, this). It was 1s, which made
+/// any batching finer than a second pointless; 0.25s is four checks a second
+/// against one indexed query on a table the client is reading anyway.
+/// Overridable at runtime: Set ^ETLWizard.Agent("ws","tick") = 0.5
+Parameter TICKDEFAULT = 0.25;
+
 Method OnPreServer() As %Status
 {
     Set ..SharedConnection = 0
@@ -57,9 +81,13 @@ Method Server() As %Status
         // Replay + live loop: push anything newer than the cursor, then use a
         // short Read timeout as the poll tick. Client frames are optional
         // ({"type":"ack"} keep-alives are ignored).
+        Set tick = +$Get(^ETLWizard.Agent("ws", "tick"), ..#TICKDEFAULT)
+        If (tick <= 0) || (tick > 5) {
+            Set tick = ..#TICKDEFAULT
+        }
         For {
             Do ..PushPending()
-            Set data = ..Read(.size, .sc, 1)
+            Set data = ..Read(.size, .sc, tick)
             If $$$ISERR(sc) {
                 If $$$GETERRORCODE(sc) = $$$CSPWebSocketClosed {
                     Quit
@@ -82,6 +110,10 @@ Method Server() As %Status
 }
 
 /// Push all persisted events for RunId with Seq > LastSeq, in order.
+///
+/// On the FIRST pass (the replay) `agent.delta` rows are skipped - but the
+/// cursor still advances past them, or the next pass would deliver the very
+/// rows this one decided not to send.
 Method PushPending() As %Status
 {
     Set sc = $$$OK
@@ -100,9 +132,12 @@ Method PushPending() As %Status
             If '$IsObject(ev) {
                 Continue
             }
-            Do ..Write(ev.ToJSON().%ToJSON())
+            If '(..Replaying && (ev.Type = "agent.delta")) {
+                Do ..Write(ev.ToJSON().%ToJSON())
+            }
             Set ..LastSeq = ev.Seq
         }
+        Set ..Replaying = 0
     } Catch ex {
         Set sc = ex.AsStatus()
     }

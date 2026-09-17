@@ -399,9 +399,17 @@ ClassMethod GetEvents(runId As %String) As %Status
             Return ..WriteError("run not found: " _ runId, "404 Not Found")
         }
         Set after = +$Get(%request.Data("after", 1), 0)
+        // `agent.delta` is the answer being typed; the `agent.note` that follows
+        // is the same answer, whole. This endpoint is the RELIABLE catch-up
+        // path, so it serves the record and not the typing - a client replaying
+        // here would otherwise render the answer twice. The WS hub applies the
+        // same rule to its replay pass. ?deltas=1 for anything inspecting the
+        // raw log.
+        Set withDeltas = +$Get(%request.Data("deltas", 1), 0)
         Set events = []
         Set stmt = ##class(%SQL.Statement).%New()
-        Set sc = stmt.%Prepare("SELECT ID FROM ETLWizard_Model.Event WHERE Run = ? AND Seq > ? ORDER BY Seq")
+        Set sc = stmt.%Prepare("SELECT ID FROM ETLWizard_Model.Event WHERE Run = ? AND Seq > ? " _
+            $Select(withDeltas: "", 1: "AND Type <> 'agent.delta' ") _ "ORDER BY Seq")
         If $$$ISERR(sc) {
             Return ..WriteError($System.Status.GetErrorText(sc))
         }

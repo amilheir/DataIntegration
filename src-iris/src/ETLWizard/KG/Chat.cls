@@ -19,10 +19,68 @@ Class ETLWizard.KG.Chat Extends %RegisteredObject
 {
 
 /// Chunks handed to the model as context.
-Parameter MAXCHUNKS = 10;
+///
+/// Every one of these is prefilled before the model writes a single token, and
+/// on this hardware that prefill IS the wait: measured at 13.2 s of silence
+/// followed by 0.6 s of streamed answer, with the model already resident. Ten
+/// chunks of product prose is ~2,400 characters of context to answer a question
+/// about one or two of them.
+///
+/// Five is the trade: the top five vector hits still carry the answer - the
+/// scores here bunch into 0.45-0.63, so hits six to ten are rarely the ones
+/// that matter - and the reader waits half as long to see anything. Raise it if
+/// a corpus needs breadth more than it needs speed.
+Parameter MAXCHUNKS = 5;
 
 /// Relationship facts appended to the context.
 Parameter MAXFACTS = 20;
+
+/// How the answer is produced. "direct" posts to the provider's own
+/// OpenAI-compatible endpoint; "agent" goes through %AI.Agent.StreamChat.
+///
+/// WHY THERE IS A CHOICE. The configured chat model (gemma4:e4b) is a THINKING
+/// model: measured on this machine it spends ~400 tokens and ~13 s reasoning
+/// before writing a 145-character answer, and %AI.Agent does not forward
+/// reasoning to the stream callback - so the reader watches 13 s of nothing.
+/// The endpoint accepts `reasoning_effort: "none"`, which cuts the same
+/// question to ~1.9 s, but %AI.Agent has no way to pass it: session config
+/// keys it does not recognise are dropped (verified - 9.5 s either way).
+///
+/// So the direct path exists for exactly one reason: to send that one field.
+/// Everything else - the prompt, the model, the Ask row, the UI - is unchanged.
+/// Set it back with SetChatMode("agent") to get the %AI.Agent path again.
+Parameter CHATMODEDEFAULT = "direct";
+
+ClassMethod GetChatMode() As %String
+{
+    Set mode = $Get(^ETLWizard.Agent("kgchat", "mode"))
+    Return $Select(mode = "": ..#CHATMODEDEFAULT, 1: mode)
+}
+
+/// "direct" | "agent"
+ClassMethod SetChatMode(mode As %String = "direct") As %String
+{
+    If (mode '= "direct") && (mode '= "agent") {
+        Return "mode must be 'direct' or 'agent'"
+    }
+    Set ^ETLWizard.Agent("kgchat", "mode") = mode
+    Return ""
+}
+
+/// Thinking budget asked of the provider on the direct path. "none" is what
+/// makes the answer arrive in seconds rather than after a silent minute;
+/// "low"/"medium"/"high" restore it if an answer needs the deliberation.
+ClassMethod GetReasoningEffort() As %String
+{
+    Set v = $Get(^ETLWizard.Agent("kgchat", "reasoningEffort"))
+    Return $Select(v = "": "none", 1: v)
+}
+
+ClassMethod SetReasoningEffort(effort As %String = "none") As %String
+{
+    Set ^ETLWizard.Agent("kgchat", "reasoningEffort") = effort
+    Return ""
+}
 
 /// Queue a question. Returns {"id": n, "status": "pending"} immediately.
 ClassMethod Ask(corpusId As %String, question As %String) As %DynamicObject
@@ -73,7 +131,7 @@ ClassMethod Run(askId As %String)
             Quit
         }
         Do ..Mark(askId, "answering", "writing the answer")
-        Set answer = ..Generate(row.question, ctx, .genErr)
+        Set answer = ..Generate(row.question, ctx, .genErr, askId)
         If genErr '= "" {
             Do ..Mark(askId, "error", genErr)
             Quit
@@ -173,7 +231,9 @@ ClassMethod AddFacts(corpusId As %String, hitIds As %String, ctx As %DynamicObje
 }
 
 /// Ask the chat model, grounded in the retrieved context.
-ClassMethod Generate(question As %String, ctx As %DynamicObject, Output err As %String) As %String [ Internal ]
+/// `askId` is where the answer is streamed as it is written. Passing "" keeps
+/// the old blocking behaviour, which is also what the streaming switch selects.
+ClassMethod Generate(question As %String, ctx As %DynamicObject, Output err As %String, askId As %String = "") As %String [ Internal ]
 {
     Set err = ""
     Try {
@@ -182,12 +242,12 @@ ClassMethod Generate(question As %String, ctx As %DynamicObject, Output err As %
             Set err = "no LLM profile (AI.LLM.ETLWizard): " _ $System.Status.GetErrorText(sc)
             Return ""
         }
-        Set agent = ##class(%AI.Agent).%New(provider)
         // The CHAT model, not the extraction model - they are separate roles
         // and cannot be GPU-resident together.
-        Set model = ##class(ETLWizard.KG.Setup).GetChatModel()
-        If model '= "" {
-            Set agent.Model = model
+        Set chatModel = ##class(ETLWizard.KG.Setup).GetChatModel()
+        Set agent = ##class(%AI.Agent).%New(provider)
+        If chatModel '= "" {
+            Set agent.Model = chatModel
         }
         Set nl = $Char(10)
         Set p = "Answer the question using ONLY the records below." _ nl _
@@ -205,9 +265,32 @@ ClassMethod Generate(question As %String, ctx As %DynamicObject, Output err As %
             }
         }
         Set p = p _ nl _ "QUESTION: " _ question _ nl
+
+        If ..GetChatMode() = "direct" {
+            Return ..Answer(p, askId, .err)
+        }
+
         Set session = agent.CreateSession()
-        Set response = agent.Chat(session, p)
+
+        // Same switch as the ETL agent's chat: one setting turns streaming off
+        // everywhere. StreamChat returns the same %AI.LLM.Response as Chat, so
+        // everything below this is unchanged either way.
+        Set cfg = ##class(ETLWizard.Agent.Service).StreamConfig()
+        Set sink = $$$NULLOREF
+        If cfg.enabled && (askId '= "") {
+            Set sink = ##class(ETLWizard.KG.AskSink).%New()
+            Do sink.StartAsk(askId, cfg.minChars, cfg.minMs)
+            Set response = agent.StreamChat(session, p, sink, "OnChunk")
+            Do sink.Finish()
+        } Else {
+            Set response = agent.Chat(session, p)
+        }
         Set answer = $Select($IsObject(response): response.Content, 1: "")
+        // a provider that streamed but returned nothing would otherwise blank
+        // an answer the reader has already watched arrive
+        If ($ZStrip(answer, "<>W") = "") && $IsObject(sink) {
+            Set answer = sink.Text
+        }
         If $ZStrip(answer, "<>W") = "" {
             Set err = "the model returned an empty answer"
             Return ""
@@ -221,6 +304,98 @@ ClassMethod Generate(question As %String, ctx As %DynamicObject, Output err As %
         Set err = ex.DisplayString()
         Return ""
     }
+}
+
+/// Ask the provider's OpenAI-compatible endpoint directly, so the request can
+/// carry `reasoning_effort`. Returns the answer, or "" with err set.
+///
+/// Not streamed, and deliberately so: with thinking off the whole answer lands
+/// in about two seconds, which is faster than the FIRST TOKEN of the thinking
+/// path. Streaming two seconds of text buys nothing and would mean parsing SSE
+/// out of a buffered HTTP client. The answer is still written to answerSoFar
+/// the moment it arrives, so the UI's streaming render path is unchanged.
+ClassMethod Answer(prompt As %String, askId As %String, Output err As %String) As %String [ Internal ]
+{
+    Set err = ""
+    Try {
+        Set err = ..Endpoint(.baseUrl, .model)
+        If err '= "" {
+            Return ""
+        }
+        Set body = {"stream": false}
+        Set body.model = model
+        Set body.messages = [{"role": "user", "content": (prompt)}]
+        Set effort = ..GetReasoningEffort()
+        If effort '= "" {
+            Do body.%Set("reasoning_effort", effort)
+        }
+
+        Set req = ##class(%Net.HttpRequest).%New()
+        Set req.Server = $Piece($Piece(baseUrl, "://", 2), ":", 1)
+        Set req.Port = +$Piece($Piece(baseUrl, "://", 2), ":", 2)
+        Set req.Https = ($Piece(baseUrl, "://", 1) = "https")
+        Set req.ContentType = "application/json"
+        Set req.Timeout = 300
+        Do req.EntityBody.Write(body.%ToJSON())
+
+        Set sc = req.Post("/v1/chat/completions")
+        If $$$ISERR(sc) {
+            Set err = "the chat model could not be reached: " _ $System.Status.GetErrorText(sc)
+            Return ""
+        }
+        If req.HttpResponse.StatusCode '= 200 {
+            Set err = "the chat endpoint returned HTTP " _ req.HttpResponse.StatusCode _
+                " - is the model '" _ model _ "' pulled in Ollama?"
+            Return ""
+        }
+        Set json = ##class(%DynamicAbstractObject).%FromJSON(req.HttpResponse.Data)
+        Set choices = json.%Get("choices")
+        If '$IsObject(choices) || (choices.%Size() = 0) {
+            Set err = "the chat model returned no choices"
+            Return ""
+        }
+        Set answer = choices.%Get(0).message.%Get("content", "")
+        // A model that ignores reasoning_effort puts its thinking inline; the
+        // reasoning FIELD beside the content is simply not read.
+        If answer [ "</think>" {
+            Set answer = $Piece(answer, "</think>", 2, *)
+        }
+        Set answer = $ZStrip(answer, "<>W")
+        If answer = "" {
+            Set err = "the model returned an empty answer"
+            Return ""
+        }
+        If askId '= "" {
+            Do ##class(ETLWizard.Tools.Util).RunDML(
+                "UPDATE ETLW_KG.Ask SET answerSoFar = ?, updatedAt = ? WHERE %ID = ?",
+                $Extract(answer, 1, 30000), $ZDateTime($Horolog, 3), askId)
+        }
+        Return answer
+    } Catch ex {
+        Set err = ex.DisplayString()
+        Return ""
+    }
+}
+
+/// Base URL and model for the chat profile, read from the same Config Store
+/// entry the agent path uses - one source of truth for where the LLM lives.
+ClassMethod Endpoint(Output baseUrl As %String, Output model As %String) As %String [ Internal ]
+{
+    Set baseUrl = "", model = ""
+    Set sc = ##class(%ConfigStore.Configuration).GetDetails("AI.LLM.ETLWizard", .details, 0, 1)
+    If $$$ISERR(sc) {
+        Return "no LLM profile (AI.LLM.ETLWizard): " _ $System.Status.GetErrorText(sc)
+    }
+    Set baseUrl = details.%Get("base_url", "")
+    If baseUrl = "" {
+        Return "the LLM profile has no base_url - the direct chat path needs one " _
+            "(use ##class(ETLWizard.KG.Chat).SetChatMode(""agent"") for a provider without one)"
+    }
+    Set model = ##class(ETLWizard.KG.Setup).GetChatModel()
+    If model = "" {
+        Set model = details.%Get("model", "")
+    }
+    Return ""
 }
 
 // ------------------------------------------------------------------ state
@@ -243,7 +418,7 @@ ClassMethod Row(askId As %String) As %DynamicObject [ Internal ]
 {
     Set stmt = ##class(%SQL.Statement).%New()
     Set stmt.%SelectMode = 1
-    Set sc = stmt.%Prepare("SELECT %ID, corpusRef, question, status, statusDetail, answer, hits FROM ETLW_KG.Ask WHERE %ID = ?")
+    Set sc = stmt.%Prepare("SELECT %ID, corpusRef, question, status, statusDetail, answer, hits, answerSoFar FROM ETLW_KG.Ask WHERE %ID = ?")
     If $$$ISERR(sc) {
         Return {"error": ($System.Status.GetErrorText(sc))}
     }
@@ -253,7 +428,8 @@ ClassMethod Row(askId As %String) As %DynamicObject [ Internal ]
     }
     Return {"id": (rs.%GetData(1)), "corpusRef": (rs.%GetData(2)), "question": (rs.%GetData(3)),
             "status": (rs.%GetData(4)), "statusDetail": (rs.%GetData(5)),
-            "answer": (rs.%GetData(6)), "hitsJson": (rs.%GetData(7))}
+            "answer": (rs.%GetData(6)), "hitsJson": (rs.%GetData(7)),
+            "answerSoFar": (rs.%GetData(8))}
 }
 
 /// What the UI polls.

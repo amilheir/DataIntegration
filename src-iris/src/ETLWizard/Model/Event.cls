@@ -13,7 +13,13 @@ Property Ts As %TimeStamp [ Required ];
 
 /// run.started | plan.updated | node.created | edge.created | node.status |
 /// check.result | watermark.updated | approval.requested | approval.resolved |
-/// agent.token | agent.note | run.finished | run.error (spec §14.2)
+/// agent.token | agent.note | agent.delta | run.finished | run.error (spec §14.2)
+///
+/// `agent.delta` is the assistant's reply as it is being written. It is the one
+/// EPHEMERAL type in this log: the WS hub and GET /runs/:id/events both withhold
+/// deltas from replay, because the `agent.note` that closes the turn carries the
+/// same text whole and a reader that took both would render the answer twice.
+/// The rows stay for audit, and ?deltas=1 serves them.
 Property Type As %String(MAXLEN = 64) [ Required ];
 
 /// Node id/name this event refers to, when applicable

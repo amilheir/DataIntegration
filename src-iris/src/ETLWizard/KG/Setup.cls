@@ -196,6 +196,11 @@ ClassMethod CreateSchema(verbose As %Boolean = 0) As %String
     If err '= "" {
         Return err
     }
+    // the chat's answer as it is being written, for its poll to read
+    Set err = ..EnsureColumn("Ask", "answerSoFar", "VARCHAR(30000)")
+    If err '= "" {
+        Return err
+    }
 
     // An HNSW index that failed to create leaves the table with NO index, which
     // downstream is indistinguishable from a slow one - every query silently

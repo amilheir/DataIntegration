@@ -367,6 +367,16 @@ body.kgchat #right { background-color: var(--paper); }
 @keyframes kgblink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .chat.kgstatus { font-style: italic; }
 
+/* A turn still being written. The caret is the only signal that the answer is
+   arriving rather than finished - without it a model that pauses mid-sentence
+   is indistinguishable from one that has stopped. */
+.chat.agent .caret {
+  display: inline-block; width: .5ch; height: 1em; margin-left: .1ch;
+  vertical-align: text-bottom; background: var(--ink-soft);
+  animation: caretBlink 1.1s step-end infinite;
+}
+@keyframes caretBlink { 50% { opacity: 0; } }
+
 /* One exchange: question, answer, and the records it came from. */
 .kgturn { display: contents; }
 
@@ -1302,10 +1312,66 @@ function wireSchedule(card, onChange) {
 }
 
 function logEvent(ev) {
+  // One turn is ~20 deltas; listing each would bury every other event in the
+  // panel. The note that follows carries the whole text and is logged normally,
+  // so nothing is actually lost here. The raw rows are still in the log, and
+  // GET /runs/:id/events?deltas=1 serves them.
+  if (ev.type === "agent.delta") return;
   const div = document.createElement("div");
   div.className = "ev " + (ev.type || "").replace(".", "-");
   div.innerHTML = `<span class="t">#${ev.seq} ${ev.type}</span> ${esc(JSON.stringify(ev.payload))}`;
   $("events").prepend(div);
+}
+
+/* ---------- A streamed assistant turn -------------------------------------
+
+   The agent's reply arrives as `agent.delta` events while the model writes,
+   then once more as the final `agent.note`. Both carry the same `turn` (the
+   Seq of the user's own note), which is what lets the deltas land in ONE
+   element and the note REPLACE it rather than append a second copy.
+
+   That replacement is what makes a mid-turn reconnect safe. The hub never
+   replays deltas, so a client that joins halfway sees only the tail from
+   there on - a partial sentence. The note then overwrites the element with the
+   whole answer, so what is on screen is correct however much of the stream
+   this client happened to witness. */
+const streamTurns = new Map();
+
+function streamDelta(turn, text) {
+  if (!text) return;
+  let t = streamTurns.get(turn);
+  if (!t) {
+    const div = document.createElement("div");
+    div.className = "chat agent streaming";
+    // "assistant", not "agent": the same turn replayed from the log renders
+    // through chatBubble(p.role) with that label, and a bubble must not change
+    // its name depending on whether you watched it arrive.
+    div.innerHTML = `<span class="who">assistant</span><span class="body"></span><span class="caret"></span>`;
+    $("convo").appendChild(div);
+    t = { el: div, body: div.querySelector(".body"), text: "" };
+    streamTurns.set(turn, t);
+  }
+  t.text += text;
+  // Re-render the ACCUMULATED text; never append markup per chunk. A chunk
+  // boundary falls wherever the model's tokenizer put it, so appending
+  // rendered fragments would split an entity, or - if this panel ever renders
+  // markdown, as the Knowledge Base one does - leave a ** opened in one chunk
+  // and closed in another.
+  t.body.textContent = t.text;
+  scrollConvo();
+}
+
+/* Returns true when it consumed the note - i.e. this turn was streamed. */
+function streamFinalize(turn, text) {
+  const t = streamTurns.get(turn);
+  if (!t) return false;
+  streamTurns.delete(turn);
+  t.body.textContent = text;
+  t.el.classList.remove("streaming");
+  const caret = t.el.querySelector(".caret");
+  if (caret) caret.remove();
+  scrollConvo();
+  return true;
 }
 
 function chatBubble(role, text) {
@@ -1647,7 +1713,14 @@ function applyEvent(ev) {
         sqlGenTarget.msg.textContent = EXEC() ? genExec : genTech;
       }
     }
+  } else if (ev.type === "agent.delta") {
+    // THE step that silently breaks the whole feature if it is missing: without
+    // this branch the backend streams perfectly, every log looks right, and the
+    // panel stays empty until the final note lands.
+    streamDelta(p.turn, p.text);
   } else if (ev.type === "agent.note") {
+    if ((p.role || "") === "assistant" && p.turn !== undefined &&
+        streamFinalize(p.turn, p.text || "")) return;
     if ((p.text || "").length) chatBubble(p.role || "agent", p.text);
   } else if (ev.type === "run.started") {
     $("runbanner").innerHTML = `Run <b>${ev.runId}</b> started &middot; ${esc(p.trigger || "")}${p.llm === false ? " &middot; no LLM" : ""}`;
@@ -4787,7 +4860,9 @@ async function ensureEtlSession() {
   // panel (BS-2). Nothing is asserted that is not read from a real clock.
   wiz.startedMs = Date.now();
   runId = j.runId; $("runid").value = j.runId; $("pipeid").value = j.pipelineId;
-  lastSeq = 0; nodes.clear(); edges.length = 0; $("events").innerHTML = ""; renderGraph();
+  lastSeq = 0; nodes.clear(); edges.length = 0; $("events").innerHTML = "";
+  streamTurns.clear();   // a half-written turn from the previous run is not this one's
+  renderGraph();
   connect();
   await refreshPipelines(j.pipelineId);
 }
@@ -5475,6 +5550,13 @@ function kgSectionChat() {
     try {
       const started = await kgCall("ask", { corpusId: KG.corpusId, question: q });
       let last = "";
+      // The bubble the answer is written into while the model writes it. The
+      // server streams CUMULATIVELY - `answerSoFar` is always the whole answer
+      // far - because a poll is not an ordered stream: it can miss a beat or
+      // coalesce two, and deltas would leave a hole. So this re-renders rather
+      // than appends, which is also what markdown needs: a ** opened in one
+      // batch is closed in a later one.
+      let live = null;
       for (;;) {
         const s = await (await fetch(api(`/kg/ask/${started.id}`))).json();
         if (s.error) throw new Error(s.error);
@@ -5482,10 +5564,28 @@ function kgSectionChat() {
           last = s.statusDetail;
           status.innerHTML = `<span class="kgpulse">${esc(s.statusDetail)}</span>`;
         }
+        if (!s.done && s.answerSoFar) {
+          if (!live) {
+            status.remove();
+            live = kgBubble("agent", "", turn);
+            live.classList.add("streaming");
+            live.insertAdjacentHTML("beforeend", `<span class="caret"></span>`);
+            $("convo").scrollTop = 0;
+          }
+          live.querySelector(".kgmd").innerHTML = kgMarkdown(s.answerSoFar);
+        }
         if (s.done) {
           status.remove();
           if (s.status === "error") {
+            if (live) live.remove();
             wfail("The answer could not be produced.", s.statusDetail);
+          } else if (live) {
+            // the whole answer replaces what was streamed into the same bubble
+            live.querySelector(".kgmd").innerHTML = kgMarkdown(s.answer);
+            live.classList.remove("streaming");
+            const caret = live.querySelector(".caret");
+            if (caret) caret.remove();
+            kgSources(s.hits, turn);
           } else {
             kgBubble("agent", s.answer, turn);
             kgSources(s.hits, turn);
@@ -5496,7 +5596,12 @@ function kgSectionChat() {
           $("convo").scrollTop = 0;
           break;
         }
-        await new Promise(r => setTimeout(r, 1500));
+        // The whole answer now lands in ~2s (thinking off, see KG.Chat), so a
+        // 1.5s first poll was itself most of the perceived wait. While the model
+        // is writing the poll also has to be quicker than the batches (~250ms)
+        // or the batching buys nothing - the effective granularity is
+        // max(batch interval, poll interval), the same arithmetic as the WS tick.
+        await new Promise(r => setTimeout(r, (s.status === "answering" || s.answerSoFar) ? 400 : 600));
       }
     } catch (e) {
       status.remove();
