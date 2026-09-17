@@ -313,9 +313,13 @@ body.kgchat #right { background-color: var(--paper); }
      each font and padding keeps every proportion - swatches, gaps, buttons -
      exactly as designed. The origin is the corner it is anchored to, so it
      shrinks toward the bottom-left instead of drifting away from it. */
-  transform: scale(.75);
+  transform: scale(0.9);
   transform-origin: left bottom;
 }
+/* The label toggle sits under the title, above the swatches, rather than with
+   the two actions at the foot of the card: it acts on the GRAPH, where those
+   act on the selection. */
+#kglegend .kglhact { margin: .15rem 0 .3rem; }
 #kglegend .kglh {
   font-variant: small-caps; letter-spacing: .14em; font-size: .72rem; color: var(--ink);
 }
@@ -5952,14 +5956,13 @@ function kgBuildLegend(nodes, nodeSel, linkSel, labelSel, view) {
 
   box.innerHTML =
     `<div class="kglh">entity types</div>` +
-    `<div class="kglhint">click to highlight &middot; pick several &middot; or click a node</div>` +
+    `<div class="kglhact"><button class="kglbtn kgllinks">hide labels</button></div>` +
     `<div class="kglbody">` +
     types.map(t => `<div class="kgleg" data-type="${escA(t)}">` +
       `<span class="sw" style="background:${KG_TYPE_COLOR[t] || "#888"}"></span>` +
       `${esc(t)} <span class="n">${counts.get(t)}</span></div>`).join("") +
     `</div>` +
     `<div class="kglacts">` +
-      `<button class="kglbtn kgllinks">hide labels</button>` +
       `<button class="kglbtn kglall">select all</button>` +
       `<button class="kglbtn kglclear">clear selection</button>` +
     `</div>`;
